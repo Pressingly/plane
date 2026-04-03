@@ -311,6 +311,28 @@ class TestProxyAuthMiddlewareEdgeCases:
     """Email normalisation and concurrent creation races."""
 
     @pytest.mark.django_db
+    def test_whitespace_only_email_header_passes_through(self):
+        """
+        GIVEN  the incoming header supplies only whitespace
+        WHEN   the middleware processes the request
+        THEN   request passes through unauthenticated
+               AND user_login() is never called
+               AND no User row is created
+        """
+        count_before = User.objects.count()
+        get_response = MagicMock(return_value=MagicMock(status_code=200))
+        middleware = make_middleware(get_response)
+        request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "   "})
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        mock_login.assert_not_called()
+        get_response.assert_called_once_with(request)
+        assert User.objects.count() == count_before
+        assert isinstance(request.user, AnonymousUser)
+
+    @pytest.mark.django_db
     def test_email_normalised_before_lookup(self, django_user_model):
         """
         GIVEN  a User exists with lowercase email "norm@example.com"

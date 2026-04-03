@@ -49,11 +49,15 @@ class ProxyAuthMiddleware:
 
     def __call__(self, request):
         # Layer 2 session already valid — nothing to do.
+        # TODO(mpass): Remove this temporary debug log once the Traefik/oauth2-proxy
+        # integration PRs are fully rolled out and verified in all environments.
         print(f"DEBUG >>>>>>>>>> middleware hit path={request.path} user={request.user}", file=sys.stderr, flush=True)
         if request.user.is_authenticated:
             return self.get_response(request)
 
         # Bypass paths use their own auth (god-mode local login, instance admin).
+        # TODO(mpass): Keep OPTIONS bypass at the proxy layer; add an app-level
+        # fallback here only if preflight routing becomes inconsistent.
         if _is_bypass_path(request.path, self.bypass_paths):
             return self.get_response(request)
 
@@ -61,7 +65,11 @@ class ProxyAuthMiddleware:
         if not email:
             return self.get_response(request)
 
-        user = self._resolve_user(_normalise_email(email))
+        email = _normalise_email(email)
+        if not email:
+            return self.get_response(request)
+
+        user = self._resolve_user(email)
 
         # Respect deactivated accounts — mPass authentication does not
         # override an explicit Plane account suspension.
