@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+import sys
 from uuid import uuid4
 
 from django.conf import settings
@@ -48,6 +49,7 @@ class ProxyAuthMiddleware:
 
     def __call__(self, request):
         # Layer 2 session already valid — nothing to do.
+        print(f"DEBUG >>>>>>>>>> middleware hit path={request.path} user={request.user}", file=sys.stderr, flush=True)
         if request.user.is_authenticated:
             return self.get_response(request)
 
