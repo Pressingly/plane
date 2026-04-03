@@ -63,6 +63,52 @@ services:
     ports:
       - "5432:5432"
 
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    networks:
+      - dev_env
+    ports:
+      - "80:80"
+      - "8080:8080"  # Traefik dashboard (dev only)
+    volumes:
+      - ./config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./config/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    restart: unless-stopped
+    networks:
+      - dev_env
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OIDC_BASE_URI}
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      OAUTH2_PROXY_COOKIE_SECURE: "false"  # HTTP in local dev
+      OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_REDIRECT_URL: http://localhost/oauth2/callback
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_SCOPE: "openid profile email"
+      # upstream=static://202 means oauth2-proxy only handles auth; Traefik handles
+      # the actual proxying to backends via the forwardAuth middleware.
+      OAUTH2_PROXY_UPSTREAMS: "static://202"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "false"
+      OAUTH2_PROXY_WHITELIST_DOMAINS: "localhost,us-east-1tnhwouxd0.auth.us-east-1.amazoncognito.com"
+      OAUTH2_PROXY_SESSION_STORE_TYPE: redis
+      OAUTH2_PROXY_REDIS_CONNECTION_URL: redis://plane-redis:6379
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    depends_on:
+      - traefik
+      - plane-redis
+
   api:
     build:
       context: ./apps/api
@@ -76,13 +122,14 @@ services:
       - ./apps/api:/code
     command: ./bin/docker-entrypoint-api-local.sh
     env_file:
+      - .env
       - ./apps/api/.env
     depends_on:
       - plane-db
       - plane-redis
       - plane-mq
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
   worker:
     build:

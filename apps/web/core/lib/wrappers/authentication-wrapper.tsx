@@ -6,7 +6,7 @@
 
 import type { ReactNode } from "react";
 import { observer } from "mobx-react";
-import { useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 // components
 import { LogoSpinner } from "@/components/common/logo-spinner";
@@ -30,7 +30,6 @@ const isValidURL = (url: string): boolean => {
 };
 
 export const AuthenticationWrapper = observer(function AuthenticationWrapper(props: TAuthenticationWrapper) {
-  const pathname = usePathname();
   const router = useAppRouter();
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next_path");
@@ -88,8 +87,11 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
   if (pageType === EPageTypes.PUBLIC) return <>{children}</>;
 
   if (pageType === EPageTypes.NON_AUTHENTICATED) {
-    if (!currentUser?.id) return <>{children}</>;
-    else {
+    if (!currentUser?.id) {
+      if (typeof window !== "undefined")
+        window.location.href = `/oauth2/sign_in?rd=${encodeURIComponent(window.location.href)}`;
+      return <></>;
+    } else {
       if (currentUserProfile?.id && isUserOnboard) {
         const currentRedirectRoute = getWorkspaceRedirectionUrl();
         router.push(currentRedirectRoute);
@@ -103,7 +105,8 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
 
   if (pageType === EPageTypes.ONBOARDING) {
     if (!currentUser?.id) {
-      router.push(`/${pathname ? `?next_path=${pathname}` : ``}`);
+      if (typeof window !== "undefined")
+        window.location.href = `/oauth2/sign_in?rd=${encodeURIComponent(window.location.href)}`;
       return <></>;
     } else {
       if (currentUser && currentUserProfile?.id && isUserOnboard) {
@@ -116,9 +119,14 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
 
   if (pageType === EPageTypes.SET_PASSWORD) {
     if (!currentUser?.id) {
-      router.push(`/${pathname ? `?next_path=${pathname}` : ``}`);
+      if (typeof window !== "undefined")
+        window.location.href = `/oauth2/sign_in?rd=${encodeURIComponent(window.location.href)}`;
       return <></>;
     } else {
+      // NOTE: With OIDC auth, is_password_autoset is always true for OIDC-created users,
+      // so the `else` branch below (which renders the set-password form) is dead code.
+      // This entire page type should be removed or redirected to the workspace once the
+      // credential-based auth flows are fully removed.
       if (currentUser && !currentUser?.is_password_autoset && currentUserProfile?.id && isUserOnboard) {
         const currentRedirectRoute = getWorkspaceRedirectionUrl();
         router.push(currentRedirectRoute);
@@ -135,7 +143,8 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
         return <></>;
       }
     } else {
-      router.push(`/${pathname ? `?next_path=${pathname}` : ``}`);
+      if (typeof window !== "undefined")
+        window.location.href = `/oauth2/sign_in?rd=${encodeURIComponent(window.location.href)}`;
       return <></>;
     }
   }

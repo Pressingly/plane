@@ -1,0 +1,74 @@
+http:
+  middlewares:
+    # ForwardAuth middleware: Traefik asks oauth2-proxy if the request is authenticated.
+    # Returns 202 (pass) or 401/redirect (deny) based on session cookie.
+    oauth2-auth:
+      forwardAuth:
+        address: "http://oauth2-proxy:4180/oauth2/auth"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Auth-Request-Email
+          - X-Auth-Request-User
+
+  routers:
+    # Frontend route — serves the Next.js/Vite dev server unauthenticated so that
+    # AuthenticationWrapper can run and issue the window.location.href redirect.
+    # The API router carries oauth2-auth, so the backend is still protected.
+    frontend:
+      entryPoints: [web]
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: frontend-web
+
+    # OPTIONS preflight — no ForwardAuth (CORS)
+    api-options:
+      entryPoints: [web]
+      rule: "Method(`OPTIONS`) && (PathPrefix(`/api`) || PathPrefix(`/auth`))"
+      priority: 40
+      service: api
+
+    # God-mode UI — no ForwardAuth (uses local email/password)
+    api-godmode:
+      entryPoints: [web]
+      rule: "PathPrefix(`/god-mode`)"
+      priority: 20
+      service: api
+
+    # God-mode API — no ForwardAuth (instance admin endpoints use their own session)
+    api-instances:
+      entryPoints: [web]
+      rule: "PathPrefix(`/api/instances`)"
+      priority: 25
+      service: api
+
+    # oauth2-proxy routes — no ForwardAuth (handles its own auth flow)
+    oauth2-proxy:
+      entryPoints: [web]
+      rule: "PathPrefix(`/oauth2`)"
+      priority: 30
+      service: oauth2-proxy
+
+    # All API routes — protected by ForwardAuth
+    api:
+      entryPoints: [web]
+      rule: "PathPrefix(`/api`) || PathPrefix(`/auth`)"
+      priority: 10
+      service: api
+      middlewares:
+        - oauth2-auth
+
+  services:
+    api:
+      loadBalancer:
+        servers:
+          - url: "http://api:8000"
+
+    frontend-web:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3000"
+
+    oauth2-proxy:
+      loadBalancer:
+        servers:
+          - url: "http://oauth2-proxy:4180"

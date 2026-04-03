@@ -32,7 +32,13 @@ export default defineConfig(() => ({
     dedupe: ["react", "react-dom", "@headlessui/react"],
   },
   server: {
-    host: "127.0.0.1",
+    host: "0.0.0.0",
+    allowedHosts: ["localhost"],
+    proxy: {
+      "/api": { target: "http://localhost:80", changeOrigin: true },
+      "/auth": { target: "http://localhost:80", changeOrigin: true },
+      "/oauth2": { target: "http://localhost:80", changeOrigin: true },
+    },
   },
   // No SSR-specific overrides needed; alias resolves to ESM build
 }));

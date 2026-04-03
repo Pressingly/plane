@@ -255,6 +255,24 @@ export class UserStore implements IUserStore {
   signOut = async (): Promise<void> => {
     await this.authService.signOut(API_BASE_URL);
     this.store.resetOnSignOut();
+    // Clear the oauth2-proxy session cookie so mPass/Cognito SSO is fully signed out.
+    // Without this, ProxyAuthMiddleware would immediately re-authenticate the user
+    // on the next request using the still-valid _oauth2_proxy cookie.
+    const oidcLogoutUrl = import.meta.env.VITE_OIDC_LOGOUT_URL;
+    const oidcClientId = import.meta.env.VITE_OIDC_CLIENT_ID;
+    if (oidcLogoutUrl && oidcClientId) {
+      try {
+        const logoutUrl = new URL(oidcLogoutUrl);
+        logoutUrl.searchParams.set("client_id", oidcClientId);
+        logoutUrl.searchParams.set("logout_uri", window.location.origin);
+        const cognitoLogoutUrl = logoutUrl.toString();
+        window.location.href = `/oauth2/sign_out?rd=${encodeURIComponent(cognitoLogoutUrl)}`;
+      } catch {
+        window.location.href = `/oauth2/sign_out?rd=${encodeURIComponent(window.location.origin)}`;
+      }
+    } else {
+      window.location.href = `/oauth2/sign_out?rd=${encodeURIComponent(window.location.origin)}`;
+    }
   };
 
   // helper actions

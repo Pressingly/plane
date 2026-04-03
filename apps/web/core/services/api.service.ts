@@ -27,8 +27,11 @@ export abstract class APIService {
       (response) => response,
       (error) => {
         if (error.response && error.response.status === 401) {
-          const currentPath = window.location.pathname;
-          window.location.replace(`/${currentPath ? `?next_path=${currentPath}` : ``}`);
+          if (typeof window !== "undefined") {
+            const rd = encodeURIComponent(window.location.href);
+            const origin = window.location.origin;
+            window.location.replace(`${origin}/oauth2/sign_in?rd=${rd}`);
+          }
         }
         return Promise.reject(error);
       }
