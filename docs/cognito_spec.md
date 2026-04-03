@@ -4,7 +4,8 @@
 
 Reads `X-Auth-Request-Email` header (set by oauth2-proxy after Cognito
 validation), finds or creates the Plane user, and establishes a native
-Django session. Disabled by default until infrastructure is in place.
+Django session. No-op until Traefik + oauth2-proxy infrastructure is
+in place (PR 3) — no behavioural change to existing Plane auth.
 
 ---
 
@@ -19,7 +20,7 @@ THEN   no DB query, no login() call
        AND passes through immediately
 ```
 
-### 3. No email header
+### 2. No email header
 
 ```
 GIVEN  X-Auth-Request-Email is absent
@@ -28,7 +29,32 @@ THEN   passes through unauthenticated
        AND request.user remains AnonymousUser
 ```
 
-### 4. New user
+### 3. Empty email after normalisation
+
+```
+GIVEN  X-Auth-Request-Email is present but normalises to empty string
+WHEN   middleware runs
+THEN   passes through unauthenticated
+       AND no DB query, no login() call
+```
+
+### 4. Bypass paths
+
+```
+GIVEN  request path starts with /god-mode (e.g. /god-mode/setup/)
+WHEN   middleware runs with a valid email header
+THEN   no DB query, no login() call
+       AND passes through unchanged
+```
+
+```
+GIVEN  request path starts with /api/instances (e.g. /api/instances/config/)
+WHEN   middleware runs with a valid email header
+THEN   no DB query, no login() call
+       AND passes through unchanged
+```
+
+### 5. New user
 
 ```
 GIVEN  X-Auth-Request-Email is present
@@ -43,7 +69,7 @@ THEN   User created with:
        AND user_login(request=request, user=user, is_app=True) called
 ```
 
-### 5. Existing user
+### 6. Existing user
 
 ```
 GIVEN  X-Auth-Request-Email is present
@@ -53,22 +79,13 @@ THEN   no duplicate User created
        AND user_login() called with the existing user
 ```
 
-### 6. Inactive user
+### 7. Inactive user
 
 ```
 GIVEN  User exists but is_active = False
 WHEN   middleware runs with that user's email header
 THEN   user_login() never called
        AND passes through unauthenticated
-```
-
-### 7. Bypass paths
-
-```
-GIVEN  request path starts with /god-mode or /api/instances
-WHEN   middleware runs (even with a valid email header)
-THEN   no DB query, no login() call
-       AND passes through unchanged
 ```
 
 ### 8. Email normalisation
