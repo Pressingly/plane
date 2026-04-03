@@ -133,15 +133,34 @@ THEN   falls back to get(email=email)
 
 ## Running tests
 
+### Via Docker (recommended)
+
 ```bash
-cd apps/api
+# Install pytest in the container (first time only)
+docker exec plane-api-1 pip install pytest pytest-django pytest-mock
 
 # All proxy auth tests
-pytest plane/authentication/tests/ -v
+docker exec plane-api-1 sh -c "cd /code && python -m pytest plane/authentication/tests/ -v"
 
 # Middleware tests only
-pytest plane/authentication/tests/test_proxy_auth.py -v
+docker exec plane-api-1 sh -c "cd /code && python -m pytest plane/authentication/tests/test_proxy_auth.py -v"
+
+# Helper function tests (no DB required)
+docker exec plane-api-1 sh -c "cd /code && python -m pytest plane/authentication/tests/test_proxy_auth_core.py -v"
+```
+
+### Via local virtualenv
+
+```bash
+cd apps/api
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements/test.txt
 
 # Helper function tests (no DB required)
 pytest plane/authentication/tests/test_proxy_auth_core.py -v
+
+# Middleware tests (requires PostgreSQL running)
+DATABASE_URL=postgresql://plane:plane@localhost:5432/plane \
+pytest plane/authentication/tests/test_proxy_auth.py -v
 ```
