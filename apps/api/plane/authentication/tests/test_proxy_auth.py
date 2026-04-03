@@ -13,7 +13,6 @@ Run (from apps/api/):
 Design contract being tested
 -----------------------------
 - Reads HTTP_X_AUTH_REQUEST_EMAIL from request.META
-- If MPASS_PROXY_AUTH_ENABLED is False → pass through (kill switch)
 - If request.user.is_authenticated → pass through immediately (no DB, no login)
 - If path starts with a bypass prefix → pass through immediately (no DB, no login)
   Default bypass prefixes: ["/god-mode", "/api/instances"]
@@ -31,7 +30,7 @@ Design contract being tested
 import pytest
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
-from django.test import RequestFactory, override_settings
+from django.test import RequestFactory
 
 from plane.authentication.middleware.proxy_auth import ProxyAuthMiddleware
 from plane.db.models import User, Profile
@@ -65,26 +64,6 @@ def make_middleware(get_response=None):
 # Test cases
 # ---------------------------------------------------------------------------
 
-
-class TestProxyAuthMiddlewareKillSwitch:
-    """MPASS_PROXY_AUTH_ENABLED = False must disable the middleware entirely."""
-
-    @override_settings(MPASS_PROXY_AUTH_ENABLED=False)
-    def test_disabled_passes_through_without_login(self):
-        """
-        GIVEN  MPASS_PROXY_AUTH_ENABLED is False
-        WHEN   a request with a valid email header arrives
-        THEN   user_login() is never called
-        """
-        get_response = MagicMock(return_value=MagicMock(status_code=200))
-        middleware = make_middleware(get_response)
-        request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "user@example.com"})
-
-        with patch(PATCH_USER_LOGIN) as mock_login:
-            middleware(request)
-
-        mock_login.assert_not_called()
-        get_response.assert_called_once_with(request)
 
 
 class TestProxyAuthMiddlewareAlreadyAuthenticated:

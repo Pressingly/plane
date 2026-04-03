@@ -10,16 +10,7 @@ Django session. Disabled by default until infrastructure is in place.
 
 ## Spec Cases
 
-### 1. Kill switch
-
-```
-GIVEN  MPASS_PROXY_AUTH_ENABLED is False
-WHEN   any request arrives (even with a valid email header)
-THEN   middleware does nothing — passes through unchanged
-       AND user_login() is never called
-```
-
-### 2. Already authenticated
+### 1. Already authenticated
 
 ```
 GIVEN  request.user.is_authenticated is True
@@ -115,13 +106,13 @@ THEN   falls back to get(email=email)
 
 ## Files
 
-| File                                                           | Purpose                                                                   |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `apps/api/plane/authentication/middleware/proxy_auth.py`       | Middleware implementation                                                 |
-| `apps/api/plane/authentication/middleware/proxy_auth_utils.py` | Helper functions: normalise, bypass check, coerce paths                   |
-| `apps/api/plane/authentication/tests/test_proxy_auth.py`       | Tests for cases 1–10 above                                                |
-| `apps/api/plane/authentication/tests/test_proxy_auth_core.py`  | Pure Python tests for helper functions                                    |
-| `apps/api/plane/settings/common.py`                            | `MPASS_PROXY_AUTH_ENABLED`, `MPASS_BYPASS_PATHS`, middleware registration |
+| File                                                           | Purpose                                                 |
+| -------------------------------------------------------------- | ------------------------------------------------------- |
+| `apps/api/plane/authentication/middleware/proxy_auth.py`       | Middleware implementation                               |
+| `apps/api/plane/authentication/middleware/proxy_auth_utils.py` | Helper functions: normalise, bypass check, coerce paths |
+| `apps/api/plane/authentication/tests/test_proxy_auth.py`       | Tests for cases 1–10 above                              |
+| `apps/api/plane/authentication/tests/test_proxy_auth_core.py`  | Pure Python tests for helper functions                  |
+| `apps/api/plane/settings/common.py`                            | `MPASS_BYPASS_PATHS`, middleware registration           |
 
 ## Running tests
 

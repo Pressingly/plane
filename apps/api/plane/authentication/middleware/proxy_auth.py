@@ -37,20 +37,16 @@ class ProxyAuthMiddleware:
     native Django session — so the rest of the app sees a fully authenticated
     request.user just as it would after a normal login.
 
-    Set MPASS_PROXY_AUTH_ENABLED = False in settings to disable entirely.
+    To disable, remove this class from the MIDDLEWARE list in settings.
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
-        self.enabled = getattr(settings, "MPASS_PROXY_AUTH_ENABLED", True)
         self.bypass_paths = _coerce_bypass_paths(
             getattr(settings, "MPASS_BYPASS_PATHS", None)
         )
 
     def __call__(self, request):
-        if not self.enabled:
-            return self.get_response(request)
-
         # Layer 2 session already valid — nothing to do.
         if request.user.is_authenticated:
             return self.get_response(request)
