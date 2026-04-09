@@ -85,8 +85,19 @@ class TestCoerceBypassPaths:
     def test_empty_list_returns_defaults(self):
         assert _coerce_bypass_paths([]) == list(_DEFAULT_BYPASS_PATHS)
 
-    def test_string_wrapped_in_list(self):
+    def test_single_string_wrapped_in_list(self):
         assert _coerce_bypass_paths("/god-mode") == ["/god-mode"]
+
+    def test_comma_separated_string_split_into_multiple_paths(self):
+        result = _coerce_bypass_paths("/god-mode,/api/instances")
+        assert result == ["/god-mode", "/api/instances"]
+
+    def test_comma_separated_string_with_spaces(self):
+        result = _coerce_bypass_paths("/god-mode, /api/instances")
+        assert result == ["/god-mode", "/api/instances"]
+
+    def test_comma_only_string_returns_defaults(self):
+        assert _coerce_bypass_paths(",,,") == list(_DEFAULT_BYPASS_PATHS)
 
     def test_list_returned_as_list(self):
         result = _coerce_bypass_paths(["/god-mode", "/api/instances"])
