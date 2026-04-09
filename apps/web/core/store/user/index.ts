@@ -16,6 +16,7 @@ import { UserPermissionStore } from "@/plane-web/store/user/permission.store";
 // services
 import { AuthService } from "@/services/auth.service";
 import { UserService } from "@/services/user.service";
+import { buildOAuth2SignOutUrl } from "@/lib/oauth2-proxy";
 // stores
 import type { IAccountStore } from "@/store/user/account.store";
 import type { IUserProfileStore } from "@/store/user/profile.store";
@@ -253,8 +254,31 @@ export class UserStore implements IUserStore {
    * @returns {Promise<void>}
    */
   signOut = async (): Promise<void> => {
-    await this.authService.signOut(API_BASE_URL);
-    this.store.resetOnSignOut();
+    try {
+      await this.authService.signOut(API_BASE_URL);
+    } catch {
+      // Continue with Layer 2/3 logout even if Django sign-out fails.
+    } finally {
+      this.store.resetOnSignOut();
+      // Clear the oauth2-proxy session cookie so mPass/Cognito SSO is fully signed out.
+      // Without this, ProxyAuthMiddleware would immediately re-authenticate the user
+      // on the next request using the still-valid _oauth2_proxy cookie.
+      const oidcLogoutUrl = import.meta.env.VITE_OIDC_LOGOUT_URL;
+      const oidcClientId = import.meta.env.VITE_OIDC_CLIENT_ID;
+      if (oidcLogoutUrl && oidcClientId) {
+        try {
+          const logoutUrl = new URL(oidcLogoutUrl);
+          logoutUrl.searchParams.set("client_id", oidcClientId);
+          logoutUrl.searchParams.set("logout_uri", window.location.origin);
+          const cognitoLogoutUrl = logoutUrl.toString();
+          window.location.href = buildOAuth2SignOutUrl(cognitoLogoutUrl);
+        } catch {
+          window.location.href = buildOAuth2SignOutUrl(window.location.origin);
+        }
+      } else {
+        window.location.href = buildOAuth2SignOutUrl(window.location.origin);
+      }
+    }
   };
 
   // helper actions

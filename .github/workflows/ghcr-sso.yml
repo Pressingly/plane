@@ -1,0 +1,65 @@
+name: Build & Push SSO Backend to GHCR
+
+# Builds ghcr.io/pressingly/plane-backend whenever the SSO branch is updated.
+# Tag produced: v1.2.3-sso  (matches PLANE_BACKEND_IMAGE in options.mk)
+
+on:
+  push:
+    branches:
+      - feat/mpass-pr2-frontend
+    paths:
+      - 'apps/api/**'
+      - '.github/workflows/ghcr-sso.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ghcr-sso-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/pressingly/plane-backend
+
+jobs:
+  build-push:
+    name: Build & Push plane-backend (GHCR)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=v1.2.3-sso
+            type=sha,prefix=git-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./apps/api
+          file: ./apps/api/Dockerfile.api
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
