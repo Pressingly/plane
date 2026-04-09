@@ -17,5 +17,6 @@ def _coerce_bypass_paths(setting) -> list:
     if not setting:
         return list(_DEFAULT_BYPASS_PATHS)
     if isinstance(setting, str):
-        return [setting]
+        paths = [p.strip() for p in setting.split(",") if p.strip()]
+        return paths if paths else list(_DEFAULT_BYPASS_PATHS)
     return list(setting)
