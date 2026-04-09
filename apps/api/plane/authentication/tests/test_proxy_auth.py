@@ -385,3 +385,43 @@ class TestProxyAuthMiddlewareEdgeCases:
 
         mock_login.assert_called_once()
         assert mock_login.call_args.kwargs["user"].pk == existing.pk
+
+
+class TestProxyAuthMiddlewareSettings:
+    """Guard the middleware registration and position in the MIDDLEWARE list."""
+
+    def test_proxy_auth_middleware_is_registered(self):
+        """
+        GIVEN  the Django settings MIDDLEWARE list
+        WHEN   inspected at runtime
+        THEN   ProxyAuthMiddleware is present
+        """
+        from django.conf import settings
+
+        assert (
+            "plane.authentication.middleware.proxy_auth.ProxyAuthMiddleware"
+            in settings.MIDDLEWARE
+        )
+
+    def test_proxy_auth_middleware_comes_after_authentication_middleware(self):
+        """
+        GIVEN  the Django settings MIDDLEWARE list
+        WHEN   inspected at runtime
+        THEN   ProxyAuthMiddleware appears after AuthenticationMiddleware
+               so that request.user is already populated when the proxy check runs.
+               If this order is reversed, the is_authenticated short-circuit never
+               fires and user_login() is called on every single request.
+        """
+        from django.conf import settings
+
+        middleware = settings.MIDDLEWARE
+        auth_idx = middleware.index(
+            "django.contrib.auth.middleware.AuthenticationMiddleware"
+        )
+        proxy_idx = middleware.index(
+            "plane.authentication.middleware.proxy_auth.ProxyAuthMiddleware"
+        )
+        assert proxy_idx > auth_idx, (
+            "ProxyAuthMiddleware must come after AuthenticationMiddleware — "
+            "request.user must be populated before the proxy auth check runs."
+        )

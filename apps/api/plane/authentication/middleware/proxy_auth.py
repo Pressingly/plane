@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
-import sys
 from uuid import uuid4
 
 from django.conf import settings
@@ -17,10 +16,13 @@ from plane.authentication.middleware.proxy_auth_utils import (
 from plane.authentication.utils.login import user_login
 from plane.db.models import Profile, User
 
-# Security note: header spoofing is not a concern on protected routes because
-# Traefik ForwardAuth overwrites X-Auth-Request-* headers before they reach
-# the app. Bypass paths never run this middleware, so spoofed headers there
-# have no effect either.
+# Security note: X-Auth-Request-* header spoofing is not a concern because the
+# backend port is not exposed outside the internal Docker network. All traffic
+# must pass through Traefik, which calls oauth2-proxy ForwardAuth and overwrites
+# these headers before forwarding to the app. If the backend port is ever
+# exposed directly (e.g. for debugging), remove it before deploying to
+# production — a client with direct access could spoof X-Auth-Request-Email
+# and impersonate any account.
 
 _NEW_USER_FLAGS = {
     "is_password_autoset": True,
@@ -49,9 +51,6 @@ class ProxyAuthMiddleware:
 
     def __call__(self, request):
         # Layer 2 session already valid — nothing to do.
-        # TODO(mpass): Remove this temporary debug log once the Traefik/oauth2-proxy
-        # integration PRs are fully rolled out and verified in all environments.
-        print(f"DEBUG >>>>>>>>>>-- middleware hit path={request.path} user={request.user}", file=sys.stderr, flush=True)
         if request.user.is_authenticated:
             return self.get_response(request)
 

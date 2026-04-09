@@ -29,9 +29,7 @@ export abstract class APIService {
       (error) => {
         if (error.response && error.response.status === 401) {
           if (typeof window !== "undefined") {
-            const currentPath = `${window.location.pathname}${window.location.search}`;
-            const origin = window.location.origin;
-            window.location.replace(`${origin}${buildOAuth2SignInUrl(currentPath)}`);
+            window.location.replace(buildOAuth2SignInUrl(window.location.href));
           }
         }
         return Promise.reject(error);
