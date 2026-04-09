@@ -91,8 +91,11 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
 
   if (pageType === EPageTypes.NON_AUTHENTICATED) {
     if (!currentUser?.id) {
-      if (typeof window !== "undefined") window.location.href = buildOAuth2SignInUrl(window.location.href);
-      return <></>;
+      if (typeof window !== "undefined" && import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+        window.location.href = buildOAuth2SignInUrl(window.location.href);
+        return <></>;
+      }
+      return <>{children}</>;
     } else {
       if (currentUserProfile?.id && isUserOnboard) {
         const currentRedirectRoute = getWorkspaceRedirectionUrl();
@@ -107,7 +110,11 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
 
   if (pageType === EPageTypes.ONBOARDING) {
     if (!currentUser?.id) {
-      if (typeof window !== "undefined") window.location.href = buildOAuth2SignInUrl(window.location.href);
+      if (typeof window !== "undefined" && import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+        window.location.href = buildOAuth2SignInUrl(window.location.href);
+        return <></>;
+      }
+      router.push("/");
       return <></>;
     } else {
       if (currentUser && currentUserProfile?.id && isUserOnboard) {
@@ -120,7 +127,11 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
 
   if (pageType === EPageTypes.SET_PASSWORD) {
     if (!currentUser?.id) {
-      if (typeof window !== "undefined") window.location.href = buildOAuth2SignInUrl(window.location.href);
+      if (typeof window !== "undefined" && import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+        window.location.href = buildOAuth2SignInUrl(window.location.href);
+        return <></>;
+      }
+      router.push("/");
       return <></>;
     } else {
       if (currentUser && !currentUser?.is_password_autoset && currentUserProfile?.id && isUserOnboard) {
@@ -139,7 +150,11 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
         return <></>;
       }
     } else {
-      if (typeof window !== "undefined") window.location.href = buildOAuth2SignInUrl(window.location.href);
+      if (typeof window !== "undefined" && import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+        window.location.href = buildOAuth2SignInUrl(window.location.href);
+        return <></>;
+      }
+      router.push("/");
       return <></>;
     }
   }
