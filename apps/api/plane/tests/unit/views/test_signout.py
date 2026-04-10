@@ -108,6 +108,7 @@ class TestSignOutAuthEndpoint:
 
         response = view.post(_make_request(factory))
 
+        mock_logout.assert_called_once()
         assert response.status_code == 302
         assert response["Location"] == _MPASS_URL
 

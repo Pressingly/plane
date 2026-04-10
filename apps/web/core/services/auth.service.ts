@@ -7,8 +7,6 @@
 // types
 import { API_BASE_URL } from "@plane/constants";
 import type { ICsrfTokenData, IEmailCheckData, IEmailCheckResponse } from "@plane/types";
-// helpers
-import { buildOAuth2SignOutUrl } from "@/lib/oauth2-proxy";
 // services
 import { APIService } from "@/services/api.service";
 
@@ -61,10 +59,11 @@ export class AuthService extends APIService {
   }
 
   async signOut(_baseUrl: string): Promise<any> {
-    // mPass SSO is the sole identity provider — full 3-layer logout via
-    // oauth2-proxy sign_out → Cognito logout → app. The native Django
-    // /auth/sign-out/ endpoint is no longer reachable in the SSO flow.
-    if (typeof window === "undefined") return;
-    window.location.href = buildOAuth2SignOutUrl(window.location.origin);
+    // Layer 1: Clear Django session via backend POST.
+    // Navigation (Layer 2 oauth2-proxy + Layer 3 Cognito) is handled by the
+    // caller (UserStore.signOut) so there is a single redirect owner.
+    await this.requestCSRFToken().then((data) =>
+      this.post("/auth/sign-out/", {}, { headers: { "X-CSRFTOKEN": data.csrf_token } })
+    );
   }
 }

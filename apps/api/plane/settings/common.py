@@ -60,7 +60,7 @@ INSTALLED_APPS = [
 ]
 
 # mPass proxy auth
-MPASS_BYPASS_PATHS = [p for p in os.environ.get("MPASS_BYPASS_PATHS", "").split(",") if p] or None
+MPASS_BYPASS_PATHS = [p.strip() for p in os.environ.get("MPASS_BYPASS_PATHS", "").split(",") if p.strip()] or None
 
 # Middlewares
 MIDDLEWARE = [
