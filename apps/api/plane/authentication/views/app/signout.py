@@ -16,16 +16,16 @@ from plane.db.models import User
 
 class SignOutAuthEndpoint(View):
     def post(self, request):
-        # Get user
         try:
             user = User.objects.get(pk=request.user.id)
             user.last_logout_ip = user_ip(request=request)
             user.last_logout_time = timezone.now()
             user.save()
-            # Log the user out of Django session
-            logout(request)
         except Exception:
             pass
+        finally:
+            # Always clear the Django session, even if user lookup/save failed
+            logout(request)
 
         # If SSO (mPass) sign-out URL is configured, redirect there to also
         # clear the shared oauth2-proxy session and Cognito session.
