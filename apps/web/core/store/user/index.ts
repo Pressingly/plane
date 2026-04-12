@@ -269,7 +269,12 @@ export class UserStore implements IUserStore {
         try {
           const logoutUrl = new URL(oidcLogoutUrl);
           logoutUrl.searchParams.set("client_id", oidcClientId);
-          logoutUrl.searchParams.set("logout_uri", window.location.origin);
+          // Redirect to the platform landing page after Cognito clears its session.
+          // The landing page is NOT behind ForwardAuth, so the user sees it instead
+          // of being bounced back to Cognito login. Falls back to current origin
+          // for deployments without the build arg.
+          const logoutRedirect = import.meta.env.VITE_LOGOUT_REDIRECT_URL || window.location.origin;
+          logoutUrl.searchParams.set("logout_uri", logoutRedirect);
           const cognitoLogoutUrl = logoutUrl.toString();
           window.location.href = buildOAuth2SignOutUrl(cognitoLogoutUrl);
         } catch {
