@@ -88,22 +88,31 @@ class ProxyAuthMiddleware:
         return self.get_response(request)
 
     def _resolve_user(self, email):
+        username_hint = email.split("@")[0] or uuid4().hex
         try:
             user, created = User.objects.get_or_create(
                 email=email,
                 defaults={
-                    "username": uuid4().hex,
+                    "username": username_hint,
                     "password": make_password(None),
                     **_NEW_USER_FLAGS,
                 },
             )
         except IntegrityError:
-            # A concurrent request raced us to the insert — fall back to get().
+            # Either a concurrent email insert race, or username collision
+            # with a different account.
             try:
                 user = User.objects.get(email=email)
+                created = False
             except User.DoesNotExist:
-                raise
-            created = False
+                # Username collision only — retry with a random UUID username.
+                user = User.objects.create(
+                    email=email,
+                    username=uuid4().hex,
+                    password=make_password(None),
+                    **_NEW_USER_FLAGS,
+                )
+                created = True
 
         if created:
             Profile.objects.get_or_create(user=user)
