@@ -60,7 +60,16 @@ class ProxyAuthMiddleware:
         if _is_bypass_path(request.path, self.bypass_paths):
             return self.get_response(request)
 
-        email = request.META.get("HTTP_X_AUTH_REQUEST_EMAIL")
+        email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
+        if email and "@" not in email:
+            # Header holds a bare username (user_id_claim=cognito:username). Synth email.
+            domain = getattr(settings, "SMB_NAME", "")
+            email = f"{email}@{domain}.com" if domain else ""
+        if not email:
+            username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
+            domain = getattr(settings, "SMB_NAME", "")
+            if username and domain:
+                email = f"{username}@{domain}.com"
         if not email:
             return self.get_response(request)
 

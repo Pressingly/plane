@@ -387,6 +387,49 @@ class TestProxyAuthMiddlewareEdgeCases:
         assert mock_login.call_args.kwargs["user"].pk == existing.pk
 
 
+class TestProxyAuthMiddlewareUsernameSynth:
+    """SMB_NAME-based email synthesis when header carries bare username."""
+
+    @pytest.mark.django_db
+    def test_bare_username_synthesizes_email(self, settings):
+        """
+        GIVEN  X-Auth-Request-Email contains a bare username (no @)
+               AND SMB_NAME is configured
+        WHEN   the middleware processes the request
+        THEN   email is synthesized as {username}@{SMB_NAME}.com
+               AND the user is created with that email
+        """
+        settings.SMB_NAME = "foss"
+        middleware = make_middleware()
+        request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "testuser"})
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        created = User.objects.get(email="testuser@foss.com")
+        assert mock_login.call_args.kwargs["user"].pk == created.pk
+
+    @pytest.mark.django_db
+    def test_real_email_bypasses_synth(self, settings):
+        """
+        GIVEN  X-Auth-Request-Email already contains a real email (has @)
+        WHEN   the middleware processes the request
+        THEN   email is used as-is and no synthesized email is created
+        """
+        settings.SMB_NAME = "foss"
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "testuser@example.com"}
+        )
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        created = User.objects.get(email="testuser@example.com")
+        assert mock_login.call_args.kwargs["user"].pk == created.pk
+        assert not User.objects.filter(email__endswith="@foss.com").exists()
+
+
 class TestProxyAuthMiddlewareSettings:
     """Guard the middleware registration and position in the MIDDLEWARE list."""
 
