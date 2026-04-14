@@ -185,31 +185,6 @@ class TestProxyAuthMiddlewareNewUser:
         assert user.username == "uuidtest"
         assert user.username != "cognito-sub-should-not-be-username"
 
-    @pytest.mark.django_db
-    def test_username_falls_back_to_uuid_on_collision(self, django_user_model):
-        """
-        GIVEN  another user already owns the desired username
-        WHEN   a new user is provisioned with a colliding email local part
-        THEN   the new user gets a 32-char uuid hex username instead
-               AND both users coexist
-        """
-        django_user_model.objects.create_user(
-            email="other@somewhere.com",
-            username="collide",
-            password="x",
-        )
-        middleware = make_middleware()
-        request = make_request(
-            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "collide@example.com"}
-        )
-
-        with patch(PATCH_USER_LOGIN):
-            middleware(request)
-
-        user = User.objects.get(email="collide@example.com")
-        assert user.username != "collide"
-        assert len(user.username) == 32
-        assert user.username.isalnum()
 
 
 class TestProxyAuthMiddlewareExistingUser:

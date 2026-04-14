@@ -99,20 +99,12 @@ class ProxyAuthMiddleware:
                 },
             )
         except IntegrityError:
-            # Either a concurrent email insert race, or username collision
-            # with a different account.
+            # Concurrent email insert race — fall back to get().
             try:
                 user = User.objects.get(email=email)
-                created = False
             except User.DoesNotExist:
-                # Username collision only — retry with a random UUID username.
-                user = User.objects.create(
-                    email=email,
-                    username=uuid4().hex,
-                    password=make_password(None),
-                    **_NEW_USER_FLAGS,
-                )
-                created = True
+                raise
+            created = False
 
         if created:
             Profile.objects.get_or_create(user=user)
