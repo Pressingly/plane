@@ -84,7 +84,7 @@ urlpatterns = [
     # path("forgot-password/", ForgotPasswordEndpoint.as_view(), name="forgot-password"),
     # path("reset-password/<uidb64>/<token>/", ResetPasswordEndpoint.as_view(), name="forgot-password"),
     # path("spaces/forgot-password/", ForgotPasswordSpaceEndpoint.as_view(), name="space-forgot-password"),
-    # path("spaces/reset-password/<uidb64>/<token>/", ResetPasswordSpaceEndpoint.as_view(), name="space-forgot-password"),
+    # path("spaces/reset-password/<uidb64>/<token>/", ResetPasswordSpaceEndpoint.as_view(), name="space-forgot-password"),  # noqa: E501
     # path("change-password/", ChangePasswordEndpoint.as_view(), name="forgot-password"),
     # path("set-password/", SetUserPasswordEndpoint.as_view(), name="set-password"),
 ]

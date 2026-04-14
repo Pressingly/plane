@@ -30,6 +30,7 @@ class TestCopyS3Objects:
             workspace=workspace,
             project_id=project.id,
             description_html='<div><image-component src="35e8b958-6ee5-43ce-ae56-fb0e776f421e"></image-component><image-component src="97988198-274f-4dfe-aa7a-4c0ffc684214"></image-component></div>',  # noqa: E501
+            description_json={},
         )
 
     @pytest.fixture
@@ -78,6 +79,7 @@ class TestCopyS3Objects:
             mock_sync.return_value = {
                 "description": "test description",
                 "description_binary": base64.b64encode(b"test binary").decode(),
+                "description_json": {},
             }
 
             # Call the actual function (not .delay())
