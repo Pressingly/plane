@@ -69,13 +69,13 @@ class TestContainsURL:
 
     def test_contains_url_length_limit_under_1000(self):
         """Test contains_url with input under 1000 characters containing URLs"""
-        # Create a string under 1000 characters with a URL
-        text_with_url = "a" * 970 + " https://example.com"  # 970 + 1 + 19 = 990 chars
+        # URL kept within first 500 chars of line (per-line scan window)
+        text_with_url = "https://example.com " + "a" * 970  # 20 + 970 = 990 chars
         assert len(text_with_url) < 1000
         assert contains_url(text_with_url) is True
 
         # Test with exactly 1000 characters
-        text_exact_1000 = "a" * 981 + "https://example.com"  # 981 + 19 = 1000 chars
+        text_exact_1000 = "https://example.com" + "a" * 981  # 19 + 981 = 1000 chars
         assert len(text_exact_1000) == 1000
         assert contains_url(text_exact_1000) is True
 
@@ -97,8 +97,8 @@ class TestContainsURL:
         assert len(text_no_url) == 1000
         assert contains_url(text_no_url) is False
 
-        # Test with exactly 1000 characters with URL at the end
-        text_with_url = "a" * 981 + "https://example.com"  # 981 + 19 = 1000 chars
+        # URL at start so it's inside the 500-char per-line scan window
+        text_with_url = "https://example.com" + "a" * 981  # 19 + 981 = 1000 chars
         assert len(text_with_url) == 1000
         assert contains_url(text_with_url) is True
 
@@ -122,7 +122,7 @@ class TestContainsURL:
         assert contains_url(over_limit_text) is False
 
         # Test that under total limit, line processing works normally
-        under_limit_with_url = "a" * 900 + "https://example.com"  # 919 chars total
+        under_limit_with_url = "https://example.com" + "a" * 900  # 919 chars total
         assert len(under_limit_with_url) < 1000
         assert contains_url(under_limit_with_url) is True
 

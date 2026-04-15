@@ -7,6 +7,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { AxiosInstance, AxiosRequestConfig } from "axios";
 import axios from "axios";
+import { buildOAuth2SignInUrl } from "@/lib/oauth2-proxy";
 
 export abstract class APIService {
   protected baseURL: string;
@@ -27,8 +28,9 @@ export abstract class APIService {
       (response) => response,
       (error) => {
         if (error.response && error.response.status === 401) {
-          const currentPath = window.location.pathname;
-          window.location.replace(`/${currentPath ? `?next_path=${currentPath}` : ``}`);
+          if (typeof window !== "undefined") {
+            window.location.replace(buildOAuth2SignInUrl(window.location.href));
+          }
         }
         return Promise.reject(error);
       }

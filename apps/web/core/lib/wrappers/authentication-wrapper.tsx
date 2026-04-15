@@ -6,10 +6,11 @@
 
 import type { ReactNode } from "react";
 import { observer } from "mobx-react";
-import { useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 // components
 import { LogoSpinner } from "@/components/common/logo-spinner";
+import { buildOAuth2SignInUrl } from "@/lib/oauth2-proxy";
 // helpers
 import { EPageTypes } from "@/helpers/authentication.helper";
 // hooks
@@ -24,13 +25,14 @@ type TAuthenticationWrapper = {
   pageType?: TPageType;
 };
 
-const isValidURL = (url: string): boolean => {
-  const disallowedSchemes = /^(https?|ftp):\/\//i;
-  return !disallowedSchemes.test(url);
+const isSafeRelativePath = (path: string): boolean => {
+  if (!path.startsWith("/")) return false;
+  if (path.startsWith("//")) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return false;
+  return true;
 };
 
 export const AuthenticationWrapper = observer(function AuthenticationWrapper(props: TAuthenticationWrapper) {
-  const pathname = usePathname();
   const router = useAppRouter();
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next_path");
@@ -58,8 +60,8 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
   const getWorkspaceRedirectionUrl = (): string => {
     let redirectionRoute = "/create-workspace";
 
-    // validating the nextPath from the router query
-    if (nextPath && isValidURL(nextPath.toString())) {
+    // Allow only safe relative paths to avoid external or scheme-based redirects.
+    if (nextPath && isSafeRelativePath(nextPath.toString())) {
       redirectionRoute = nextPath.toString();
       return redirectionRoute;
     }
@@ -88,8 +90,13 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
   if (pageType === EPageTypes.PUBLIC) return <>{children}</>;
 
   if (pageType === EPageTypes.NON_AUTHENTICATED) {
-    if (!currentUser?.id) return <>{children}</>;
-    else {
+    if (!currentUser?.id) {
+      if (typeof window !== "undefined" && import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+        window.location.href = buildOAuth2SignInUrl(window.location.href);
+        return <></>;
+      }
+      return <>{children}</>;
+    } else {
       if (currentUserProfile?.id && isUserOnboard) {
         const currentRedirectRoute = getWorkspaceRedirectionUrl();
         router.push(currentRedirectRoute);
@@ -103,7 +110,11 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
 
   if (pageType === EPageTypes.ONBOARDING) {
     if (!currentUser?.id) {
-      router.push(`/${pathname ? `?next_path=${pathname}` : ``}`);
+      if (typeof window !== "undefined" && import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+        window.location.href = buildOAuth2SignInUrl(window.location.href);
+        return <></>;
+      }
+      router.push("/");
       return <></>;
     } else {
       if (currentUser && currentUserProfile?.id && isUserOnboard) {
@@ -116,7 +127,11 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
 
   if (pageType === EPageTypes.SET_PASSWORD) {
     if (!currentUser?.id) {
-      router.push(`/${pathname ? `?next_path=${pathname}` : ``}`);
+      if (typeof window !== "undefined" && import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+        window.location.href = buildOAuth2SignInUrl(window.location.href);
+        return <></>;
+      }
+      router.push("/");
       return <></>;
     } else {
       if (currentUser && !currentUser?.is_password_autoset && currentUserProfile?.id && isUserOnboard) {
@@ -135,7 +150,11 @@ export const AuthenticationWrapper = observer(function AuthenticationWrapper(pro
         return <></>;
       }
     } else {
-      router.push(`/${pathname ? `?next_path=${pathname}` : ``}`);
+      if (typeof window !== "undefined" && import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+        window.location.href = buildOAuth2SignInUrl(window.location.href);
+        return <></>;
+      }
+      router.push("/");
       return <></>;
     }
   }

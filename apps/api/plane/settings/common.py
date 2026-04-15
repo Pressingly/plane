@@ -59,6 +59,10 @@ INSTALLED_APPS = [
     "django_celery_beat",
 ]
 
+# mPass proxy auth
+MPASS_BYPASS_PATHS = [p.strip() for p in os.environ.get("MPASS_BYPASS_PATHS", "").split(",") if p.strip()] or None
+SMB_NAME = os.environ.get("SMB_NAME", "")
+
 # Middlewares
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
@@ -68,6 +72,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "plane.authentication.middleware.proxy_auth.ProxyAuthMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "crum.CurrentRequestUserMiddleware",
     "django.middleware.gzip.GZipMiddleware",
