@@ -281,7 +281,10 @@ export class UserStore implements IUserStore {
           window.location.href = buildOAuth2SignOutUrl(window.location.origin);
         }
       } else {
-        window.location.href = buildOAuth2SignOutUrl(window.location.origin);
+        // No Cognito hosted logout — clear oauth2-proxy cookie only, land on portal
+        // (falls back to origin, which triggers ForwardAuth re-auth and loops).
+        const logoutRedirect = import.meta.env.VITE_LOGOUT_REDIRECT_URL || window.location.origin;
+        window.location.href = buildOAuth2SignOutUrl(logoutRedirect);
       }
     }
   };
