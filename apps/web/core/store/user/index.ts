@@ -16,7 +16,6 @@ import { UserPermissionStore } from "@/plane-web/store/user/permission.store";
 // services
 import { AuthService } from "@/services/auth.service";
 import { UserService } from "@/services/user.service";
-import { buildOAuth2SignOutUrl } from "@/lib/oauth2-proxy";
 // stores
 import type { IAccountStore } from "@/store/user/account.store";
 import type { IUserProfileStore } from "@/store/user/profile.store";
@@ -257,35 +256,13 @@ export class UserStore implements IUserStore {
     try {
       await this.authService.signOut(API_BASE_URL);
     } catch {
-      // Continue with Layer 2/3 logout even if Django sign-out fails.
+      // Django session already gone (or network); still clear client state and navigate.
     } finally {
       this.store.resetOnSignOut();
-      // Clear the oauth2-proxy session cookie so mPass/Cognito SSO is fully signed out.
-      // Without this, ProxyAuthMiddleware would immediately re-authenticate the user
-      // on the next request using the still-valid _oauth2_proxy cookie.
-      const oidcLogoutUrl = import.meta.env.VITE_OIDC_LOGOUT_URL;
-      const oidcClientId = import.meta.env.VITE_OIDC_CLIENT_ID;
-      if (oidcLogoutUrl && oidcClientId) {
-        try {
-          const logoutUrl = new URL(oidcLogoutUrl);
-          logoutUrl.searchParams.set("client_id", oidcClientId);
-          // Redirect to the platform landing page after Cognito clears its session.
-          // The landing page is NOT behind ForwardAuth, so the user sees it instead
-          // of being bounced back to Cognito login. Falls back to current origin
-          // for deployments without the build arg.
-          const logoutRedirect = import.meta.env.VITE_LOGOUT_REDIRECT_URL || window.location.origin;
-          logoutUrl.searchParams.set("logout_uri", logoutRedirect);
-          const cognitoLogoutUrl = logoutUrl.toString();
-          window.location.href = buildOAuth2SignOutUrl(cognitoLogoutUrl);
-        } catch {
-          window.location.href = buildOAuth2SignOutUrl(window.location.origin);
-        }
-      } else {
-        // No Cognito hosted logout — clear oauth2-proxy cookie only, land on portal
-        // (falls back to origin, which triggers ForwardAuth re-auth and loops).
-        const logoutRedirect = import.meta.env.VITE_LOGOUT_REDIRECT_URL || window.location.origin;
-        window.location.href = buildOAuth2SignOutUrl(logoutRedirect);
-      }
+      // Rewrite "foss-<app>.<domain>" → "foss.<domain>" so we land on the portal
+      // (outside ForwardAuth) instead of Plane's own root, which would silently re-auth.
+      const portalHost = window.location.host.replace(/^[^.]*\./, "foss.");
+      window.location.href = `${window.location.protocol}//${portalHost}`;
     }
   };
 
