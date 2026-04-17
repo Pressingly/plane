@@ -123,7 +123,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
   const isPasswordAlreadySetup = !user?.is_password_autoset;
   // Hide optional password on SSO builds only (VITE_AUTH_TYPE baked at build time).
   const isSsoAuth =
-    import.meta.env.VITE_AUTH_TYPE?.toString().trim().toUpperCase() === "SSO";
+    (import.meta.env.VITE_AUTH_TYPE ?? "").trim().toUpperCase() === "SSO";
   const showOptionalPassword = !isSsoAuth && !isPasswordAlreadySetup;
   const currentPassword = watch("password") || undefined;
   const currentConfirmPassword = watch("confirm_password") || undefined;
