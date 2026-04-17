@@ -261,7 +261,7 @@ export class UserStore implements IUserStore {
       this.store.resetOnSignOut();
       // Rewrite "foss-<app>.<domain>" → "foss.<domain>" so we land on the portal
       // (outside ForwardAuth) instead of Plane's own root, which would silently re-auth.
-      const portalHost = window.location.hostname.replace(/^[^.]*\./, "foss.");
+      const portalHost = window.location.host.replace(/^[^.]*\./, "foss.");
       window.location.href = `${window.location.protocol}//${portalHost}`;
     }
   };
