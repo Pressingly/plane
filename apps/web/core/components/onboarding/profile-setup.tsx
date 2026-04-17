@@ -221,7 +221,7 @@ export const ProfileSetup = observer(function ProfileSetup(props: Props) {
   // derived values
   const isPasswordAlreadySetup = !user?.is_password_autoset;
   const isSsoAuth =
-    import.meta.env.VITE_AUTH_TYPE?.toString().trim().toUpperCase() === "SSO";
+    (import.meta.env.VITE_AUTH_TYPE?.toString() ?? "").trim().toUpperCase() === "SSO";
   const showOptionalPassword = !isSsoAuth && !isPasswordAlreadySetup;
   const currentPassword = watch("password") || undefined;
   const currentConfirmPassword = watch("confirm_password") || undefined;
