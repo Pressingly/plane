@@ -122,8 +122,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
   // derived values
   const isPasswordAlreadySetup = !user?.is_password_autoset;
   // Hide optional password on SSO builds only (VITE_AUTH_TYPE baked at build time).
-  const isSsoAuth =
-    (import.meta.env.VITE_AUTH_TYPE ?? "").trim().toUpperCase() === "SSO";
+  const isSsoAuth = (import.meta.env.VITE_AUTH_TYPE ?? "").trim().toUpperCase() === "SSO";
   const showOptionalPassword = !isSsoAuth && !isPasswordAlreadySetup;
   const currentPassword = watch("password") || undefined;
   const currentConfirmPassword = watch("confirm_password") || undefined;
@@ -144,8 +143,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
   }, [currentPassword, currentConfirmPassword]);
 
   const needsPasswordValidation = showOptionalPassword;
-  const isButtonDisabled =
-    isSubmitting || !isValid || (needsPasswordValidation && !isValidPassword);
+  const isButtonDisabled = isSubmitting || !isValid || (needsPasswordValidation && !isValidPassword);
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-10">

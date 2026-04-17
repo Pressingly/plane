@@ -220,8 +220,7 @@ export const ProfileSetup = observer(function ProfileSetup(props: Props) {
 
   // derived values
   const isPasswordAlreadySetup = !user?.is_password_autoset;
-  const isSsoAuth =
-    (import.meta.env.VITE_AUTH_TYPE?.toString() ?? "").trim().toUpperCase() === "SSO";
+  const isSsoAuth = (import.meta.env.VITE_AUTH_TYPE?.toString() ?? "").trim().toUpperCase() === "SSO";
   const showOptionalPassword = !isSsoAuth && !isPasswordAlreadySetup;
   const currentPassword = watch("password") || undefined;
   const currentConfirmPassword = watch("confirm_password") || undefined;
@@ -242,8 +241,7 @@ export const ProfileSetup = observer(function ProfileSetup(props: Props) {
   }, [currentPassword, currentConfirmPassword]);
 
   const needsPasswordValidation = showOptionalPassword;
-  const isButtonDisabled =
-    isSubmitting || !isValid || (needsPasswordValidation && !isValidPassword);
+  const isButtonDisabled = isSubmitting || !isValid || (needsPasswordValidation && !isValidPassword);
 
   return (
     <div className="flex h-full w-full">
