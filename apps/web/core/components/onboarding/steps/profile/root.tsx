@@ -121,6 +121,10 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
 
   // derived values
   const isPasswordAlreadySetup = !user?.is_password_autoset;
+  // SSO / proxy-auth users have is_password_autoset=true; optional password block only makes sense when
+  // instance allows email+password auth (otherwise Cognito-only — hide password UI).
+  const showOptionalPassword =
+    !isPasswordAlreadySetup && instanceConfig?.is_email_password_enabled === true;
   const currentPassword = watch("password") || undefined;
   const currentConfirmPassword = watch("confirm_password") || undefined;
 
@@ -139,10 +143,9 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
     }
   }, [currentPassword, currentConfirmPassword]);
 
-  // Check for all available fields validation and if password field is available, then checks for password validation (strength + confirmation).
-  // Also handles the condition for optional password i.e if password field is optional it only checks for above validation if it's not empty.
+  const needsPasswordValidation = showOptionalPassword;
   const isButtonDisabled =
-    !isSubmitting && isValid ? (isPasswordAlreadySetup ? false : isValidPassword ? false : true) : true;
+    isSubmitting || !isValid || (needsPasswordValidation && !isValidPassword);
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-10">
@@ -238,8 +241,8 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
           {errors.first_name && <span className="text-13 text-danger-primary">{errors.first_name.message}</span>}
         </div>
 
-        {/* setting up password for the first time */}
-        {!isPasswordAlreadySetup && (
+        {/* Optional local password — only when instance allows email/password auth (not Cognito/SSO-only). */}
+        {showOptionalPassword && (
           <SetPasswordRoot
             onPasswordChange={(password) => setValue("password", password)}
             onConfirmPasswordChange={(confirm_password) => setValue("confirm_password", confirm_password)}

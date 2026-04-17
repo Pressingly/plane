@@ -20,6 +20,7 @@ import { Input, PasswordStrengthIndicator, Spinner } from "@plane/ui";
 import { cn, getFileURL, getPasswordStrength, validatePersonName } from "@plane/utils";
 import { UserImageUploadModal } from "@/components/core/modals/user-image-upload-modal";
 // hooks
+import { useInstance } from "@/hooks/store/use-instance";
 import { useUser, useUserProfile } from "@/hooks/store/user";
 // services
 import { AuthService } from "@/services/auth.service";
@@ -91,6 +92,7 @@ export const ProfileSetup = observer(function ProfileSetup(props: Props) {
   // store hooks
   const { updateCurrentUser } = useUser();
   const { updateUserProfile } = useUserProfile();
+  const { config: instanceConfig } = useInstance();
   // form info
   const {
     getValues,
@@ -220,6 +222,8 @@ export const ProfileSetup = observer(function ProfileSetup(props: Props) {
 
   // derived values
   const isPasswordAlreadySetup = !user?.is_password_autoset;
+  const showOptionalPassword =
+    !isPasswordAlreadySetup && instanceConfig?.is_email_password_enabled === true;
   const currentPassword = watch("password") || undefined;
   const currentConfirmPassword = watch("confirm_password") || undefined;
 
@@ -238,10 +242,9 @@ export const ProfileSetup = observer(function ProfileSetup(props: Props) {
     }
   }, [currentPassword, currentConfirmPassword]);
 
-  // Check for all available fields validation and if password field is available, then checks for password validation (strength + confirmation).
-  // Also handles the condition for optional password i.e if password field is optional it only checks for above validation if it's not empty.
+  const needsPasswordValidation = showOptionalPassword;
   const isButtonDisabled =
-    !isSubmitting && isValid ? (isPasswordAlreadySetup ? false : isValidPassword ? false : true) : true;
+    isSubmitting || !isValid || (needsPasswordValidation && !isValidPassword);
 
   return (
     <div className="flex h-full w-full">
@@ -366,8 +369,8 @@ export const ProfileSetup = observer(function ProfileSetup(props: Props) {
                 </div>
               </div>
 
-              {/* setting up password for the first time */}
-              {!isPasswordAlreadySetup && (
+              {/* Optional local password — only when instance allows email/password auth */}
+              {showOptionalPassword && (
                 <>
                   <div className="space-y-1">
                     <label className="text-13 font-medium text-tertiary" htmlFor="password">
