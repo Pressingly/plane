@@ -61,7 +61,7 @@ INSTALLED_APPS = [
 
 # mPass proxy auth
 MPASS_BYPASS_PATHS = [p.strip() for p in os.environ.get("MPASS_BYPASS_PATHS", "").split(",") if p.strip()] or None
-SMB_NAME = os.environ.get("SMB_NAME", "")
+DEFAULT_EMAIL_DOMAIN = os.environ.get("DEFAULT_EMAIL_DOMAIN", "askii.ai")
 
 # Middlewares
 MIDDLEWARE = [

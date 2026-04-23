@@ -63,13 +63,13 @@ class ProxyAuthMiddleware:
         email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
         if email and "@" not in email:
             # Header holds a bare username (user_id_claim=cognito:username). Synth email.
-            domain = getattr(settings, "SMB_NAME", "")
-            email = f"{email}@{domain}.com" if domain else ""
+            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
+            email = f"{email}@{domain}"
         if not email:
             username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
-            domain = getattr(settings, "SMB_NAME", "")
-            if username and domain:
-                email = f"{username}@{domain}.com"
+            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
+            if username:
+                email = f"{username}@{domain}"
         if not email:
             return self.get_response(request)
 
