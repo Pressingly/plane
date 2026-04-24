@@ -64,7 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="theme-color" content="#fff" />
         <link rel="icon" type="image/png" sizes="32x32" href={favicon32} />
         <link rel="icon" type="image/png" sizes="16x16" href={favicon16} />
-        <link rel="manifest" href="/site.webmanifest.json" />
+        <link rel="manifest" href="/site.webmanifest.json" crossOrigin="use-credentials" />
         <link rel="shortcut icon" href={faviconIco} />
         {/* Meta info for PWA */}
         <meta name="application-name" content="Plane" />
@@ -76,7 +76,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-icon" href={icon512} />
         <link rel="apple-touch-icon" sizes="180x180" href={icon180} />
         <link rel="apple-touch-icon" sizes="512x512" href={icon512} />
-        <link rel="manifest" href="/manifest.json" />
+        <link rel="manifest" href="/manifest.json" crossOrigin="use-credentials" />
       </head>
       <body>
         <div id="context-menu-portal" />
