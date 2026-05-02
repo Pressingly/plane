@@ -259,11 +259,9 @@ export class UserStore implements IUserStore {
       // Django session already gone (or network); still clear client state and navigate.
     } finally {
       this.store.resetOnSignOut();
-      // Rewrite "<SMB_NAME>-<app>.<domain>" → "<SMB_NAME>.<domain>" so we land on the portal
+      // Rewrite "<prefix>-<app>.<domain>" → "<prefix>.<domain>" so we land on the portal
       // (outside ForwardAuth) instead of Plane's own root, which would silently re-auth.
-
-      const smbName = process.env.SMB_NAME.trim();
-      const portalHost = window.location.host.replace(/^[^.]*\./, `${smbName}.`);
+      const portalHost = window.location.host.replace(/^([^-]+)-[^.]+\.(.+)/, "$1.$2");
       window.location.href = `${window.location.protocol}//${portalHost}`;
     }
   };

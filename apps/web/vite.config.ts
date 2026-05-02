@@ -6,9 +6,9 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
-// Expose VITE_* client vars plus SMB_NAME (portal hostname prefix on logout redirect)
+// Expose only vars starting with VITE_
 const viteEnv = Object.keys(process.env)
-  .filter((k) => k.startsWith("VITE_") || k === "SMB_NAME")
+  .filter((k) => k.startsWith("VITE_"))
   .reduce<Record<string, string>>((a, k) => {
     a[k] = process.env[k] ?? "";
     return a;
