@@ -23,12 +23,8 @@ export const LIVE_URL = encodeURI(`${LIVE_BASE_URL}${LIVE_BASE_PATH}`);
 export const WEB_BASE_URL = process.env.VITE_WEB_BASE_URL || "";
 export const WEB_BASE_PATH = process.env.VITE_WEB_BASE_PATH || "";
 export const WEB_URL = encodeURI(`${WEB_BASE_URL}${WEB_BASE_PATH}`);
-// SMB dashboard URL (required — no fallback; build will fail if unset)
-export const SMB_DASHBOARD_URL: string = (() => {
-  const url = process.env.VITE_SMB_DASHBOARD_URL;
-  if (!url) throw new Error("VITE_SMB_DASHBOARD_URL is required but not set");
-  return url;
-})();
+// SMB dashboard URL
+export const SMB_DASHBOARD_URL = process.env.VITE_SMB_DASHBOARD_URL || "";
 // plane website url
 export const WEBSITE_URL = process.env.VITE_WEBSITE_URL || "https://plane.so";
 // support email
