@@ -7,7 +7,7 @@
 import { cloneDeep, set } from "lodash-es";
 import { action, makeObservable, observable, runInAction, computed } from "mobx";
 // plane imports
-import { EUserPermissions, API_BASE_URL } from "@plane/constants";
+import { EUserPermissions, API_BASE_URL, SMB_DASHBOARD_URL } from "@plane/constants";
 import type { IUser, TUserPermissions } from "@plane/types";
 // plane web imports
 import type { RootStore } from "@/plane-web/store/root.store";
@@ -259,10 +259,7 @@ export class UserStore implements IUserStore {
       // Django session already gone (or network); still clear client state and navigate.
     } finally {
       this.store.resetOnSignOut();
-      // Rewrite "foss-<app>.<domain>" → "foss.<domain>" so we land on the portal
-      // (outside ForwardAuth) instead of Plane's own root, which would silently re-auth.
-      const portalHost = window.location.host.replace(/^[^.]*\./, "moneta.");
-      window.location.href = `${window.location.protocol}//${portalHost}`;
+      window.location.href = SMB_DASHBOARD_URL;
     }
   };
 
