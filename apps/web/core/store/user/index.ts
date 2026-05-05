@@ -7,7 +7,7 @@
 import { cloneDeep, set } from "lodash-es";
 import { action, makeObservable, observable, runInAction, computed } from "mobx";
 // plane imports
-import { EUserPermissions, API_BASE_URL, SMB_DASHBOARD_URL } from "@plane/constants";
+import { EUserPermissions, API_BASE_URL, SIGNOUT_URL } from "@plane/constants";
 import type { IUser, TUserPermissions } from "@plane/types";
 // plane web imports
 import type { RootStore } from "@/plane-web/store/root.store";
@@ -259,7 +259,7 @@ export class UserStore implements IUserStore {
       // Django session already gone (or network); still clear client state and navigate.
     } finally {
       this.store.resetOnSignOut();
-      window.location.href = SMB_DASHBOARD_URL;
+      window.location.href = SIGNOUT_URL;
     }
   };
 
