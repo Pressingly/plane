@@ -16,13 +16,19 @@ from plane.authentication.middleware.proxy_auth_utils import (
 from plane.authentication.utils.login import user_login
 from plane.db.models import Profile, User
 
-# Security note: X-Auth-Request-* header spoofing is not a concern because the
-# backend port is not exposed outside the internal Docker network. All traffic
-# must pass through Traefik, which calls oauth2-proxy ForwardAuth and overwrites
-# these headers before forwarding to the app. If the backend port is ever
-# exposed directly (e.g. for debugging), remove it before deploying to
-# production — a client with direct access could spoof X-Auth-Request-Email
-# and impersonate any account.
+# Security note: X-Auth-Request-* header spoofing is closed by three layers,
+# any of which alone is sufficient:
+#   1. Network: backend port is not published outside the Docker network — all
+#      traffic must pass through Traefik.
+#   2. Traefik edge: `strip-auth-headers` middleware nulls inbound
+#      X-Auth-Request-* before `mpass-auth` runs, so a client can't supply them.
+#   3. App-level (this middleware): we only consume the headers when
+#      `settings.AUTH_TYPE == "SSO"` — the env-gate matches what's wired in
+#      docker-compose.yml. A misconfigured deploy that forgets to set the env,
+#      or a Traefik label regression that drops `strip-auth-headers`, would
+#      not by itself enable header spoofing — this gate has to also be wrong.
+#      RULES.md §4 Threat 3 documents the contract: every backend that reads
+#      X-Auth-Request-* MUST refuse them when AUTH_TYPE != "SSO".
 
 _NEW_USER_FLAGS = {
     "is_password_autoset": True,
@@ -50,6 +56,13 @@ class ProxyAuthMiddleware:
         )
 
     def __call__(self, request):
+        # Header-trust gate — refuse to consume X-Auth-Request-* unless the
+        # deploy explicitly opts into SSO mode. Defense-in-depth against
+        # misconfiguration (e.g. AUTH_TYPE env unset, Traefik strip-auth
+        # regression). RULES.md §4 Threat 3.
+        if getattr(settings, "AUTH_TYPE", "") != "SSO":
+            return self.get_response(request)
+
         # Layer 2 session already valid — nothing to do.
         if request.user.is_authenticated:
             return self.get_response(request)

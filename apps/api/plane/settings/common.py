@@ -60,6 +60,7 @@ INSTALLED_APPS = [
 ]
 
 # mPass proxy auth
+AUTH_TYPE = os.environ.get("AUTH_TYPE", "")
 MPASS_BYPASS_PATHS = [p.strip() for p in os.environ.get("MPASS_BYPASS_PATHS", "").split(",") if p.strip()] or None
 DEFAULT_EMAIL_DOMAIN = os.environ.get("DEFAULT_EMAIL_DOMAIN", "askii.ai")
 
