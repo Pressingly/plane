@@ -5,6 +5,7 @@
 from uuid import uuid4
 
 from django.conf import settings
+from django.contrib.auth import logout as django_logout
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError
 
@@ -50,34 +51,31 @@ class ProxyAuthMiddleware:
         )
 
     def __call__(self, request):
-        # Layer 2 session already valid — nothing to do.
-        if request.user.is_authenticated:
-            return self.get_response(request)
-
         # Bypass paths use their own auth (god-mode local login, instance admin).
-        # TODO(mpass): Keep OPTIONS bypass at the proxy layer; add an app-level
-        # fallback here only if preflight routing becomes inconsistent.
+        # Skipped before any session/header inspection so admin tooling stays
+        # untouched even if a stale Django session is present.
         if _is_bypass_path(request.path, self.bypass_paths):
             return self.get_response(request)
 
-        email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
-        if email and "@" not in email:
-            # Header holds a bare username (user_id_claim=cognito:username). Synth email.
-            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
-            email = f"{email}@{domain}"
-        if not email:
-            username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
-            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
-            if username:
-                email = f"{username}@{domain}"
-        if not email:
+        header_email = self._extract_header_email(request)
+
+        if request.user.is_authenticated:
+            session_email = _normalise_email(getattr(request.user, "email", "") or "")
+            if not header_email or header_email == session_email:
+                # Session matches the upstream-asserted identity (or no header
+                # to compare against) — pass through.
+                return self.get_response(request)
+            # Header asserts a different identity than the Django session.
+            # Drop the stale session before re-resolving so the next request
+            # carries cookies for the real upstream user. Without this, a
+            # browser whose Cognito session has been swapped out continues to
+            # serve the previous user's data until SESSION_COOKIE_AGE expires.
+            django_logout(request)
+
+        if not header_email:
             return self.get_response(request)
 
-        email = _normalise_email(email)
-        if not email:
-            return self.get_response(request)
-
-        user = self._resolve_user(email)
+        user = self._resolve_user(header_email)
 
         # Respect deactivated accounts — mPass authentication does not
         # override an explicit Plane account suspension.
@@ -86,6 +84,19 @@ class ProxyAuthMiddleware:
 
         user_login(request=request, user=user, is_app=True)
         return self.get_response(request)
+
+    def _extract_header_email(self, request):
+        email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
+        if email and "@" not in email:
+            # Header holds a bare username (user_id_claim=cognito:username). Synth email.
+            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
+            email = f"{email}@{domain}"
+        if not email:
+            username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
+            if username:
+                domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
+                email = f"{username}@{domain}"
+        return _normalise_email(email) if email else ""
 
     def _resolve_user(self, email):
         username_hint = email.split("@")[0] or uuid4().hex
@@ -99,12 +110,24 @@ class ProxyAuthMiddleware:
                 },
             )
         except IntegrityError:
-            # Concurrent email insert race — fall back to get().
+            # IntegrityError can fire on either unique constraint:
+            # 1. email — concurrent insert race, the row now exists.
+            # 2. username — a different email already holds username_hint
+            #    (e.g. alice@a.com vs alice@b.com from federated pools).
+            # Look up by email first; if missing, retry with a uuid-based
+            # username so the second user isn't permanently locked out.
             try:
                 user = User.objects.get(email=email)
+                created = False
             except User.DoesNotExist:
-                raise
-            created = False
+                user, created = User.objects.get_or_create(
+                    email=email,
+                    defaults={
+                        "username": uuid4().hex,
+                        "password": make_password(None),
+                        **_NEW_USER_FLAGS,
+                    },
+                )
 
         if created:
             Profile.objects.get_or_create(user=user)

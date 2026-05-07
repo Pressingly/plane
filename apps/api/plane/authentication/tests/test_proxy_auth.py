@@ -20,11 +20,15 @@ Design contract being tested
 - If email is present → get_or_create User, create Profile on first creation,
   then call user_login(request, user, is_app=True) to establish session
 - New users get: set_unusable_password(), is_password_autoset=True, is_email_verified=True
-- username is always uuid4().hex (never the Cognito sub — avoids length/collision issues)
+- username is derived from the email local part on first insert; on a username
+  collision (different email, same local part) we retry with uuid4().hex so the
+  second user is not permanently locked out by a 500
 - Email is normalised (lowercased + stripped) before DB lookup
 - Inactive users pass through unauthenticated even with a valid header
-- IntegrityError on concurrent creation falls back to .get(email=email),
-  re-raises if the user still doesn't exist
+- IntegrityError on concurrent email insert race falls back to .get(email=email);
+  IntegrityError on a username collision retries with a uuid-based username
+- An authenticated session whose user.email differs from X-Auth-Request-Email is
+  cleared before the middleware re-resolves the user from the header
 """
 
 import pytest
@@ -72,7 +76,8 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
     @pytest.mark.django_db
     def test_skips_when_user_already_authenticated(self, django_user_model):
         """
-        GIVEN  a request whose user.is_authenticated is True
+        GIVEN  a request whose user.is_authenticated is True AND the header
+               email matches the session user
         WHEN   the middleware processes the request
         THEN   get_response is called exactly once
                AND user_login() is never called
@@ -96,6 +101,93 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
         get_response.assert_called_once_with(request)
         mock_login.assert_not_called()
         assert User.objects.count() == count_before
+
+    @pytest.mark.django_db
+    def test_skips_when_authenticated_and_no_header(self, django_user_model):
+        """
+        GIVEN  an authenticated session and no X-Auth-Request-Email header
+               (e.g. a bypass-router request that still carries a session cookie)
+        WHEN   the middleware processes the request
+        THEN   the session is preserved and user_login() is not called
+        """
+        existing_user = django_user_model.objects.create_user(
+            email="bypass@example.com",
+            username="bypass_user",
+            password="x",
+        )
+        middleware = make_middleware()
+        request = make_request(authenticated_user=existing_user)
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        mock_login.assert_not_called()
+        assert request.user == existing_user
+
+
+class TestProxyAuthMiddlewareIdentityMismatch:
+    """A live Django session whose email diverges from the header must be replaced."""
+
+    @pytest.mark.django_db
+    def test_session_email_mismatch_forces_relogin(self, django_user_model):
+        """
+        GIVEN  the Django session resolves to user A
+               AND oauth2-proxy now asserts user B via X-Auth-Request-Email
+        WHEN   the middleware processes the request
+        THEN   the stale session is cleared (django_logout)
+               AND user_login() is called with user B
+        """
+        user_a = django_user_model.objects.create_user(
+            email="alice@example.com",
+            username="alice_user",
+            password="x",
+        )
+        user_b = django_user_model.objects.create_user(
+            email="bob@example.com",
+            username="bob_user",
+            password="x",
+        )
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "bob@example.com"},
+            authenticated_user=user_a,
+        )
+
+        with patch(
+            "plane.authentication.middleware.proxy_auth.django_logout"
+        ) as mock_logout, patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        mock_logout.assert_called_once_with(request)
+        mock_login.assert_called_once()
+        assert mock_login.call_args.kwargs["user"].pk == user_b.pk
+
+    @pytest.mark.django_db
+    def test_session_email_mismatch_is_case_insensitive(self, django_user_model):
+        """
+        GIVEN  session user has email 'mixed@example.com'
+               AND header is '  MIXED@EXAMPLE.COM  '
+        WHEN   the middleware processes the request
+        THEN   the session is preserved (no false-positive mismatch)
+        """
+        user = django_user_model.objects.create_user(
+            email="mixed@example.com",
+            username="mixed_user",
+            password="x",
+        )
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "  MIXED@EXAMPLE.COM  "},
+            authenticated_user=user,
+        )
+
+        with patch(
+            "plane.authentication.middleware.proxy_auth.django_logout"
+        ) as mock_logout, patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        mock_logout.assert_not_called()
+        mock_login.assert_not_called()
 
 
 class TestProxyAuthMiddlewareNoHeader:
@@ -386,6 +478,32 @@ class TestProxyAuthMiddlewareEdgeCases:
 
         mock_login.assert_called_once()
         assert mock_login.call_args.kwargs["user"].pk == existing.pk
+
+    @pytest.mark.django_db
+    def test_username_collision_falls_back_to_uuid(self, django_user_model):
+        """
+        GIVEN  a user already exists with username derived from a different email
+               (alice@example.com → username='alice')
+        WHEN   a second user logs in with email 'alice@partner.org'
+        THEN   the middleware must not 500 — instead it inserts the second user
+               with a uuid-based username so both can coexist
+        """
+        django_user_model.objects.create_user(
+            email="alice@example.com",
+            username="alice",
+            password="x",
+        )
+        middleware = make_middleware()
+        request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "alice@partner.org"})
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        second = User.objects.get(email="alice@partner.org")
+        assert second.username != "alice"
+        assert mock_login.call_args.kwargs["user"].pk == second.pk
+        # both rows survive
+        assert User.objects.filter(email="alice@example.com").exists()
 
 
 class TestProxyAuthMiddlewareUsernameSynth:
