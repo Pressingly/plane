@@ -29,7 +29,16 @@ export abstract class APIService {
       (error) => {
         if (error.response && error.response.status === 401) {
           if (typeof window !== "undefined") {
-            window.location.replace(buildOAuth2SignInUrl(window.location.href));
+            // Mirror authentication-wrapper.tsx — only route through
+            // oauth2-proxy when the proxy is actually deployed in front of
+            // the app. Without the env, /oauth2/sign_in is a 404 and the
+            // user is stranded.
+            if (import.meta.env.VITE_OAUTH2_PROXY_BASE_PATH) {
+              window.location.replace(buildOAuth2SignInUrl(window.location.href));
+            } else {
+              const currentPath = window.location.pathname;
+              window.location.replace(`/${currentPath ? `?next_path=${currentPath}` : ""}`);
+            }
           }
         }
         return Promise.reject(error);

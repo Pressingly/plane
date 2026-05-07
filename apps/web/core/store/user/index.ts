@@ -13,6 +13,8 @@ import type { IUser, TUserPermissions } from "@plane/types";
 import type { RootStore } from "@/plane-web/store/root.store";
 import type { IUserPermissionStore } from "@/plane-web/store/user/permission.store";
 import { UserPermissionStore } from "@/plane-web/store/user/permission.store";
+// lib
+import { buildLogoutDestination } from "@/lib/oauth2-proxy";
 // services
 import { AuthService } from "@/services/auth.service";
 import { UserService } from "@/services/user.service";
@@ -259,10 +261,11 @@ export class UserStore implements IUserStore {
       // Django session already gone (or network); still clear client state and navigate.
     } finally {
       this.store.resetOnSignOut();
-      // Rewrite "<app>.<domain>" → "<domain>" so we land on the portal
-      // (outside ForwardAuth) instead of Plane's own root, which would silently re-auth.
-      const portalHost = window.location.host.replace(/^[^.]+\.(?=[^.]*\.[^.]*\.)/, "");
-      window.location.href = `${window.location.protocol}//${portalHost}`;
+      // Top-level navigate to the SSO sign-out chain: oauth2-proxy clears
+      // its session and (when Cognito creds are configured) hops to Cognito
+      // which lands on the portal. Without this, the browser stays on the
+      // ForwardAuth-protected origin and silently re-authenticates.
+      window.location.href = buildLogoutDestination();
     }
   };
 
