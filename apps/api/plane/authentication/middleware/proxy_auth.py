@@ -14,7 +14,12 @@ from plane.authentication.middleware.proxy_auth_utils import (
     _normalise_email,
 )
 from plane.authentication.utils.login import user_login
-from plane.db.models import Profile, User
+from plane.db.models import Profile, User, Workspace, WorkspaceMember
+from plane.db.models.workspace import ROLE_CHOICES
+
+# Build a label → value lookup so role names can be used symbolically.
+# e.g. _ROLE["Member"] == 15, _ROLE["Guest"] == 5, _ROLE["Admin"] == 20
+_ROLE = {label: value for value, label in ROLE_CHOICES}
 
 # Security note: X-Auth-Request-* header spoofing is not a concern because the
 # backend port is not exposed outside the internal Docker network. All traffic
@@ -109,4 +114,41 @@ class ProxyAuthMiddleware:
         if created:
             Profile.objects.get_or_create(user=user)
 
+        # Run for every user (new or existing) — idempotent, no-op if already joined.
+        self._auto_join_workspace(user)
+
         return user
+
+    @staticmethod
+    def _auto_join_workspace(user):
+        """
+        On every login, ensure the user is a member of the first existing workspace
+        and that their onboarding is marked complete so Plane skips the wizard.
+        If no workspace exists yet, do nothing — the normal create-workspace flow
+        will be shown.
+        Idempotent: get_or_create and conditional profile update make repeated
+        calls safe and cheap.
+        """
+        workspace = Workspace.objects.order_by("created_at").first()
+        if workspace is None:
+            return
+
+        # Role: Member — auto-joined SSO users get full member access, not guest.
+        WorkspaceMember.objects.get_or_create(
+            workspace=workspace,
+            member=user,
+            defaults={"role": _ROLE["Member"], "is_active": True},
+        )
+
+        # Only update profile if onboarding is not yet complete — avoids a
+        # write on every request for already-onboarded users.
+        Profile.objects.filter(user=user, is_onboarded=False).update(
+            is_onboarded=True,
+            last_workspace_id=workspace.id,
+            onboarding_step={
+                "profile_complete": True,
+                "workspace_create": True,
+                "workspace_invite": True,
+                "workspace_join": True,
+            },
+        )
