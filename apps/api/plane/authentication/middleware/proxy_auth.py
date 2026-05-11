@@ -129,6 +129,13 @@ class ProxyAuthMiddleware:
         Idempotent: get_or_create and conditional profile update make repeated
         calls safe and cheap.
         """
+        # Only act if the user has no active workspace memberships at all.
+        already_member = WorkspaceMember.objects.filter(
+            member=user, is_active=True
+        ).exists()
+        if already_member:
+            return
+
         workspace = Workspace.objects.order_by("created_at").first()
         if workspace is None:
             return
