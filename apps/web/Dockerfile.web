@@ -15,7 +15,7 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 ARG TURBO_VERSION=2.8.12
-RUN corepack enable pnpm && pnpm add -g turbo@${TURBO_VERSION}
+RUN corepack prepare pnpm@10.30.2 --activate && pnpm add -g turbo@${TURBO_VERSION}
 COPY . .
 
 RUN turbo prune --scope=web --docker
