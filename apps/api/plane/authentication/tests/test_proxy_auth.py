@@ -16,7 +16,10 @@ Design contract being tested
 - If request.user.is_authenticated → pass through immediately (no DB, no login)
 - If path starts with a bypass prefix → pass through immediately (no DB, no login)
   Default bypass prefixes: ["/god-mode", "/api/instances"]
-- If email header is absent → pass through unauthenticated
+- If email header is absent OR is not a real email (no "@") → pass through
+  unauthenticated. Bare usernames / Cognito sub fallbacks are NOT synthesised
+  into emails — that would let a Cognito principal whose username collides with
+  the local-part of a real user's email take that account over.
 - If email is present → get_or_create User, create Profile on first creation,
   then call user_login(request, user, is_app=True) to establish session
 - New users get: set_unusable_password(), is_password_autoset=True, is_email_verified=True
@@ -388,45 +391,59 @@ class TestProxyAuthMiddlewareEdgeCases:
         assert mock_login.call_args.kwargs["user"].pk == existing.pk
 
 
-class TestProxyAuthMiddlewareUsernameSynth:
-    """DEFAULT_EMAIL_DOMAIN-based email synthesis when header carries bare username."""
+class TestProxyAuthMiddlewareRejectsNonEmailHeader:
+    """
+    Identity key is the email header. Bare usernames must be refused — never
+    synthesised into an email — because synthesised values can collide with
+    real user emails and enable account impersonation.
+    """
 
     @pytest.mark.django_db
-    def test_bare_username_synthesizes_email(self):
+    def test_bare_username_header_passes_through_unauthenticated(self):
         """
         GIVEN  X-Auth-Request-Email contains a bare username (no @)
-               AND DEFAULT_EMAIL_DOMAIN is not set
         WHEN   the middleware processes the request
-        THEN   email is synthesized as {username}@askii.ai (the hardcoded default)
-               AND the user is created with that email
+        THEN   request passes through unauthenticated
+               AND user_login() is never called
+               AND no User is created
         """
-        middleware = make_middleware()
+        count_before = User.objects.count()
+        get_response = MagicMock(return_value=MagicMock(status_code=200))
+        middleware = make_middleware(get_response)
         request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "testuser"})
 
         with patch(PATCH_USER_LOGIN) as mock_login:
             middleware(request)
 
-        created = User.objects.get(email="testuser@askii.ai")
-        assert mock_login.call_args.kwargs["user"].pk == created.pk
+        mock_login.assert_not_called()
+        get_response.assert_called_once_with(request)
+        assert User.objects.count() == count_before
+        assert isinstance(request.user, AnonymousUser)
 
     @pytest.mark.django_db
-    def test_real_email_bypasses_synth(self):
+    def test_only_x_auth_request_user_header_passes_through_unauthenticated(self):
         """
-        GIVEN  X-Auth-Request-Email already contains a real email (has @)
+        GIVEN  X-Auth-Request-Email is absent
+               AND X-Auth-Request-User (Cognito sub) is present
         WHEN   the middleware processes the request
-        THEN   email is used as-is and no synthesized email is created
+        THEN   request passes through unauthenticated
+               AND user_login() is never called
+               AND no User is created — the sub alone is not enough to identify
+               a Plane user, and synthesising an email from the sub would risk
+               collision with an existing user's real email.
         """
-        middleware = make_middleware()
-        request = make_request(
-            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "testuser@example.com"}
-        )
+        count_before = User.objects.count()
+        get_response = MagicMock(return_value=MagicMock(status_code=200))
+        middleware = make_middleware(get_response)
+        request = make_request(meta={"HTTP_X_AUTH_REQUEST_USER": "some-cognito-sub"})
 
         with patch(PATCH_USER_LOGIN) as mock_login:
             middleware(request)
 
-        created = User.objects.get(email="testuser@example.com")
-        assert mock_login.call_args.kwargs["user"].pk == created.pk
-        assert not User.objects.filter(email__endswith="@askii.ai").exists()
+        mock_login.assert_not_called()
+        get_response.assert_called_once_with(request)
+        assert User.objects.count() == count_before
+        assert isinstance(request.user, AnonymousUser)
 
 
 class TestProxyAuthMiddlewareSettings:

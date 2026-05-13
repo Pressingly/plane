@@ -65,21 +65,13 @@ class ProxyAuthMiddleware:
         if _is_bypass_path(request.path, self.bypass_paths):
             return self.get_response(request)
 
-        email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
-        if email and "@" not in email:
-            # Header holds a bare username (user_id_claim=cognito:username). Synth email.
-            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
-            email = f"{email}@{domain}"
-        if not email:
-            username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
-            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
-            if username:
-                email = f"{username}@{domain}"
-        if not email:
-            return self.get_response(request)
-
-        email = _normalise_email(email)
-        if not email:
+        # Identity key is the email header. Refuse bare usernames or missing
+        # values — never synthesise an email from a sub/username, because the
+        # synthesised value collides with real user emails whose domain matches
+        # the synth domain, enabling account impersonation. oauth2-proxy must
+        # be configured to forward the verified `email` claim.
+        email = _normalise_email(request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "")
+        if "@" not in email:
             return self.get_response(request)
 
         user = self._resolve_user(email)
