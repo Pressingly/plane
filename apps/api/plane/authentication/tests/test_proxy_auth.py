@@ -27,13 +27,16 @@ Design contract being tested
   re-raises if the user still doesn't exist
 """
 
+from uuid import uuid4
+
 import pytest
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 
 from plane.authentication.middleware.proxy_auth import ProxyAuthMiddleware
-from plane.db.models import User, Profile
+from plane.db.models import Profile, User, Workspace, WorkspaceMember
+from plane.db.models.workspace import ROLE_CHOICES
 
 PATCH_USER_LOGIN = "plane.authentication.middleware.proxy_auth.user_login"
 
@@ -427,6 +430,121 @@ class TestProxyAuthMiddlewareUsernameSynth:
         created = User.objects.get(email="testuser@example.com")
         assert mock_login.call_args.kwargs["user"].pk == created.pk
         assert not User.objects.filter(email__endswith="@askii.ai").exists()
+
+
+_GUEST_ROLE = {label: value for value, label in ROLE_CHOICES}["Guest"]
+
+
+def _make_workspace(owner, slug="auto-join-target"):
+    """Create a workspace owned by `owner` with a unique slug."""
+    return Workspace.objects.create(
+        name=slug, slug=f"{slug}-{uuid4().hex[:8]}", id=uuid4(), owner=owner
+    )
+
+
+class TestProxyAuthMiddlewareAutoJoin:
+    """
+    Auto-join behaviour:
+    - Only fires on user *creation* (not every login), so an admin who removes
+      a user's membership doesn't see it silently re-granted.
+    - Requires MPASS_AUTO_JOIN_WORKSPACE_ID to be set — no implicit "oldest
+      workspace" fallback.
+    - Grants the lowest role (Guest), not Member.
+    """
+
+    @pytest.mark.django_db
+    def test_no_auto_join_when_workspace_id_unset(self, django_user_model):
+        """
+        GIVEN  MPASS_AUTO_JOIN_WORKSPACE_ID is unset
+               AND a workspace exists
+        WHEN   a new SSO user logs in
+        THEN   no WorkspaceMember row is created for that user
+        """
+        owner = django_user_model.objects.create_user(
+            email="owner-noauto@example.com", username="owner_noauto", password="x"
+        )
+        _make_workspace(owner, slug="exists-but-not-configured")
+
+        middleware = make_middleware()
+        request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "newbie-noauto@example.com"})
+
+        with override_settings(MPASS_AUTO_JOIN_WORKSPACE_ID=None):
+            with patch(PATCH_USER_LOGIN):
+                middleware(request)
+
+        user = User.objects.get(email="newbie-noauto@example.com")
+        assert not WorkspaceMember.objects.filter(member=user).exists()
+
+    @pytest.mark.django_db
+    def test_no_auto_join_when_configured_workspace_missing(self, django_user_model):
+        """
+        GIVEN  MPASS_AUTO_JOIN_WORKSPACE_ID points to a non-existent UUID
+        WHEN   a new SSO user logs in
+        THEN   no WorkspaceMember row is created (no fallback to "any workspace")
+        """
+        middleware = make_middleware()
+        request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "newbie-missing@example.com"})
+
+        with override_settings(MPASS_AUTO_JOIN_WORKSPACE_ID=str(uuid4())):
+            with patch(PATCH_USER_LOGIN):
+                middleware(request)
+
+        user = User.objects.get(email="newbie-missing@example.com")
+        assert not WorkspaceMember.objects.filter(member=user).exists()
+
+    @pytest.mark.django_db
+    def test_new_user_joins_configured_workspace_as_guest(self, django_user_model):
+        """
+        GIVEN  MPASS_AUTO_JOIN_WORKSPACE_ID is set to an existing workspace
+        WHEN   a new SSO user logs in
+        THEN   a WorkspaceMember row is created with role=Guest, is_active=True
+        """
+        owner = django_user_model.objects.create_user(
+            email="owner-guest@example.com", username="owner_guest", password="x"
+        )
+        workspace = _make_workspace(owner, slug="guest-target")
+
+        middleware = make_middleware()
+        request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "newbie-guest@example.com"})
+
+        with override_settings(MPASS_AUTO_JOIN_WORKSPACE_ID=str(workspace.id)):
+            with patch(PATCH_USER_LOGIN):
+                middleware(request)
+
+        user = User.objects.get(email="newbie-guest@example.com")
+        membership = WorkspaceMember.objects.get(member=user, workspace=workspace)
+        assert membership.role == _GUEST_ROLE
+        assert membership.is_active is True
+
+    @pytest.mark.django_db
+    def test_existing_user_with_no_memberships_is_not_auto_joined(self, django_user_model):
+        """
+        GIVEN  a User already exists with zero WorkspaceMember rows
+               AND MPASS_AUTO_JOIN_WORKSPACE_ID is configured
+        WHEN   that user logs in via SSO
+        THEN   no WorkspaceMember row is created — auto-join is for newly-created
+               users only. This is the load-bearing property: an admin who has
+               removed someone from every workspace must not see them silently
+               re-granted access on the next login.
+        """
+        owner = django_user_model.objects.create_user(
+            email="owner-existing@example.com", username="owner_existing", password="x"
+        )
+        workspace = _make_workspace(owner, slug="existing-target")
+        existing = django_user_model.objects.create_user(
+            email="existing@example.com",
+            username="existing_user",
+            password="x",
+        )
+
+        middleware = make_middleware()
+        request = make_request(meta={"HTTP_X_AUTH_REQUEST_EMAIL": "existing@example.com"})
+
+        with override_settings(MPASS_AUTO_JOIN_WORKSPACE_ID=str(workspace.id)):
+            with patch(PATCH_USER_LOGIN):
+                middleware(request)
+
+        assert not WorkspaceMember.objects.filter(member=existing).exists()
 
 
 class TestProxyAuthMiddlewareSettings:

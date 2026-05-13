@@ -62,6 +62,10 @@ INSTALLED_APPS = [
 # mPass proxy auth
 MPASS_BYPASS_PATHS = [p.strip() for p in os.environ.get("MPASS_BYPASS_PATHS", "").split(",") if p.strip()] or None
 DEFAULT_EMAIL_DOMAIN = os.environ.get("DEFAULT_EMAIL_DOMAIN", "askii.ai")
+# Optional: nominate a single workspace that newly-created SSO users are
+# auto-joined to as Guest. Unset → no auto-join (the create-workspace flow
+# is shown instead). Set to a Workspace UUID to opt in.
+MPASS_AUTO_JOIN_WORKSPACE_ID = os.environ.get("MPASS_AUTO_JOIN_WORKSPACE_ID") or None
 
 # Middlewares
 MIDDLEWARE = [

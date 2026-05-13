@@ -113,42 +113,43 @@ class ProxyAuthMiddleware:
 
         if created:
             Profile.objects.get_or_create(user=user)
-
-        # Run for every user (new or existing) — idempotent, no-op if already joined.
-        self._auto_join_workspace(user)
+            # Auto-join only fires on user creation. Running on every login is
+            # surprising: an admin who removes a user's only membership has it
+            # silently re-granted on the user's next request.
+            self._auto_join_workspace(user)
 
         return user
 
     @staticmethod
     def _auto_join_workspace(user):
         """
-        On every login, ensure the user is a member of the first existing workspace
-        and that their onboarding is marked complete so Plane skips the wizard.
-        If no workspace exists yet, do nothing — the normal create-workspace flow
-        will be shown.
-        Idempotent: get_or_create and conditional profile update make repeated
-        calls safe and cheap.
+        On first-seen SSO user, add them to the workspace nominated by
+        MPASS_AUTO_JOIN_WORKSPACE_ID with role Guest, and mark onboarding
+        complete so Plane skips the wizard.
+
+        Refuses to act if:
+        - MPASS_AUTO_JOIN_WORKSPACE_ID is unset — no implicit "oldest workspace"
+          fallback, because that silently grants every SSO principal access to
+          whichever workspace happens to be oldest. The target must be explicit.
+        - The configured workspace does not exist.
         """
-        # Only act if the user has no active workspace memberships at all.
-        already_member = WorkspaceMember.objects.filter(
-            member=user, is_active=True
-        ).exists()
-        if already_member:
+        workspace_id = getattr(settings, "MPASS_AUTO_JOIN_WORKSPACE_ID", None)
+        if not workspace_id:
             return
 
-        workspace = Workspace.objects.order_by("created_at").first()
+        workspace = Workspace.objects.filter(pk=workspace_id).first()
         if workspace is None:
             return
 
-        # Role: Member — auto-joined SSO users get full member access, not guest.
+        # Role: Guest — lowest-privilege default. Operators can promote via
+        # the normal Plane invite/role-change UI. Avoids handing full Member
+        # write access to every Cognito principal that completes login.
         WorkspaceMember.objects.get_or_create(
             workspace=workspace,
             member=user,
-            defaults={"role": _ROLE["Member"], "is_active": True},
+            defaults={"role": _ROLE["Guest"], "is_active": True},
         )
 
-        # Only update profile if onboarding is not yet complete — avoids a
-        # write on every request for already-onboarded users.
         Profile.objects.filter(user=user, is_onboarded=False).update(
             is_onboarded=True,
             last_workspace_id=workspace.id,
