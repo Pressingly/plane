@@ -7,13 +7,13 @@ ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 ENV CI=1
 
-RUN corepack enable pnpm
+RUN corepack enable
 
 # =========================================================================== #
 
 FROM base AS builder
 
-RUN pnpm add -g turbo@2.8.12
+RUN corepack prepare pnpm@10.30.2 --activate && pnpm add -g turbo@2.8.12
 
 COPY . .
 
@@ -66,6 +66,8 @@ COPY --from=builder /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
 # Copy full directory structure before fetch to ensure all package.json files are available
 COPY --from=builder /app/out/full/ .
 COPY turbo.json turbo.json
+
+RUN corepack enable pnpm
 
 # Fetch dependencies to cache store, then install offline with dev deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm fetch --store-dir=/pnpm/store
