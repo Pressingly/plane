@@ -62,15 +62,14 @@ class ProxyAuthMiddleware:
         if _is_bypass_path(request.path, self.bypass_paths):
             return self.get_response(request)
 
-        proxy_email = self._read_proxy_email(request)
+        email = _normalise_email(self._read_proxy_email(request))
 
         if request.user.is_authenticated:
             # Short-circuit only when the upstream-asserted identity matches the
             # current Django session, or when no header is present (request did
             # not pass through ForwardAuth — header absence is not a logout signal).
             current = _normalise_email(request.user.email or "")
-            incoming = _normalise_email(proxy_email or "")
-            if not incoming or current == incoming:
+            if not email or current == email:
                 return self.get_response(request)
 
             # Mismatch detected: proxy asserts a different identity than the
@@ -80,10 +79,6 @@ class ProxyAuthMiddleware:
             # previous user's identity.
             logout(request)
 
-        if not proxy_email:
-            return self.get_response(request)
-
-        email = _normalise_email(proxy_email)
         if not email:
             return self.get_response(request)
 
@@ -110,6 +105,13 @@ class ProxyAuthMiddleware:
 
         Returns the raw (un-normalised) email string, or "" if none could be
         derived. Caller is responsible for `_normalise_email` before using.
+
+        TODO(security): the bare-username synthesis paths let a Cognito
+        principal whose username collides with a real Plane user's email
+        local-part impersonate that user (e.g. `cognito:username=alice` →
+        synthesised to `alice@askii.ai` → resolves to an existing `alice@askii.ai`
+        Plane user). See branch `fix/proxy-auth-reject-bare-username` for the
+        defensive fix that drops these paths and requires a real email claim.
         """
         email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
         if email and "@" not in email:

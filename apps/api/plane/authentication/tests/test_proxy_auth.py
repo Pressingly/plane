@@ -439,6 +439,38 @@ class TestProxyAuthMiddlewareBypassPaths:
         mock_login.assert_not_called()
         assert User.objects.count() == count_before
 
+    @pytest.mark.django_db
+    def test_bypass_dominates_mismatched_proxy_header(self, django_user_model):
+        """
+        GIVEN  the current Django session belongs to alice
+               AND the request targets a bypass path (/god-mode/setup/)
+               AND X-Auth-Request-Email = bob's email (mismatch)
+        WHEN   the middleware processes the request
+        THEN   logout() is NOT called — bypass dominates the mismatch flow
+               AND user_login() is NOT called
+
+        The bypass check runs at the top of __call__, before the proxy header
+        is read or session identity is compared. This guards god-mode local
+        admin sessions against being kicked out by an unrelated mPass
+        identity reaching the same browser.
+        """
+        alice = django_user_model.objects.create_user(
+            email="alice@example.com", username="alice", password="x",
+        )
+        middleware = make_middleware()
+        request = make_request(
+            path="/god-mode/setup/",
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "bob@example.com"},
+            authenticated_user=alice,
+        )
+
+        with patch(PATCH_USER_LOGIN) as mock_login, \
+             patch(PATCH_LOGOUT) as mock_logout:
+            middleware(request)
+
+        mock_logout.assert_not_called()
+        mock_login.assert_not_called()
+
 
 class TestProxyAuthMiddlewareEdgeCases:
     """Email normalisation and concurrent creation races."""
