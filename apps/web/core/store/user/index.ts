@@ -16,6 +16,8 @@ import { UserPermissionStore } from "@/plane-web/store/user/permission.store";
 // services
 import { AuthService } from "@/services/auth.service";
 import { UserService } from "@/services/user.service";
+// lib
+import { buildOAuth2SignOutUrl } from "@/lib/oauth2-proxy";
 // stores
 import type { IAccountStore } from "@/store/user/account.store";
 import type { IUserProfileStore } from "@/store/user/profile.store";
@@ -259,10 +261,39 @@ export class UserStore implements IUserStore {
       // Django session already gone (or network); still clear client state and navigate.
     } finally {
       this.store.resetOnSignOut();
-      // Rewrite "<app>.<domain>" → "<domain>" so we land on the portal
-      // (outside ForwardAuth) instead of Plane's own root, which would silently re-auth.
+
+      // Land on the portal (parent domain, outside ForwardAuth) so the
+      // browser doesn't silently re-auth against Plane's own root.
       const portalHost = window.location.host.replace(/^[^.]+\.(?=[^.]*\.[^.]*\.)/, "");
-      window.location.href = `${window.location.protocol}//${portalHost}`;
+      const portalUrl = `${window.location.protocol}//${portalHost}`;
+
+      // Chain the remaining two auth layers on top of the Django sign-out
+      // that just completed:
+      //   Layer 2 — /oauth2/sign_out clears the _oauth2_proxy cookie + Redis
+      //             session, then redirects to its `rd=` target.
+      //   Layer 3 — Cognito /logout clears the upstream SSO session, then
+      //             redirects to its `logout_uri`, which we point at the
+      //             portal URL.
+      //
+      // Without this chain, only Layer 1 is cleared: oauth2-proxy + Cognito
+      // both retain the user's session, so the next visit to any app in the
+      // bundle silently re-authenticates as the same user (no password
+      // prompt at Cognito's hosted UI either, since the SSO session is alive).
+      const cognitoLogoutBase = import.meta.env.VITE_OIDC_LOGOUT_URL;
+      const oidcClientId = import.meta.env.VITE_OIDC_CLIENT_ID;
+
+      if (cognitoLogoutBase && oidcClientId) {
+        const cognitoUrl =
+          `${cognitoLogoutBase}?client_id=${encodeURIComponent(oidcClientId)}` +
+          `&logout_uri=${encodeURIComponent(portalUrl)}`;
+        window.location.href = buildOAuth2SignOutUrl(cognitoUrl);
+      } else {
+        // OIDC env vars not configured. Best-effort: still clear oauth2-proxy
+        // so the next request re-prompts (even though Cognito's SSO session
+        // will outlive this until its own TTL expires or the user clicks
+        // "Use a different account" at the hosted UI).
+        window.location.href = buildOAuth2SignOutUrl(portalUrl);
+      }
     }
   };
 
