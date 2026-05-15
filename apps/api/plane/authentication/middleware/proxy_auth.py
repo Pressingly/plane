@@ -99,7 +99,7 @@ class ProxyAuthMiddleware:
     def _read_proxy_email(request):
         """Extract the upstream-asserted email from oauth2-proxy headers.
 
-        Handles two header shapes:
+        Handles three cases:
           - X-Auth-Request-Email contains a real email → use as-is
           - X-Auth-Request-Email contains a bare username (user_id_claim=
             cognito:username) → synthesise <username>@DEFAULT_EMAIL_DOMAIN
