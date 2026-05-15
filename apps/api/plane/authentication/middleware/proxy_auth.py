@@ -110,8 +110,8 @@ class ProxyAuthMiddleware:
         principal whose username collides with a real Plane user's email
         local-part impersonate that user (e.g. `cognito:username=alice` →
         synthesised to `alice@askii.ai` → resolves to an existing `alice@askii.ai`
-        Plane user). See branch `fix/proxy-auth-reject-bare-username` for the
-        defensive fix that drops these paths and requires a real email claim.
+        Plane user). The defensive fix is to drop these synthesis paths and
+        require a real email claim from the upstream proxy.
         """
         email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
         if email and "@" not in email:
