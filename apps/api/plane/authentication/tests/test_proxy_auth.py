@@ -35,7 +35,7 @@ Design contract being tested
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 
@@ -136,8 +136,15 @@ class TestProxyAuthMiddlewareUserSwitch:
             authenticated_user=alice,
         )
 
+        # Use a manager mock to track call order
+        manager = Mock()
+        
         with patch(PATCH_USER_LOGIN) as mock_login, \
              patch(PATCH_LOGOUT) as mock_logout:
+            # Attach mocks to manager to track order
+            manager.attach_mock(mock_logout, 'logout')
+            manager.attach_mock(mock_login, 'login')
+            
             middleware(request)
 
         # Session should be flushed when mismatch is detected
@@ -145,6 +152,13 @@ class TestProxyAuthMiddlewareUserSwitch:
         # Then re-auth with the new user
         mock_login.assert_called_once()
         assert mock_login.call_args.kwargs["user"].pk == bob.pk
+        
+        # Verify logout happens before user_login (order matters for security)
+        call_names = [call[0] for call in manager.mock_calls]
+        assert 'logout' in call_names and 'login' in call_names, \
+            "Both logout and login should be called"
+        assert call_names.index('logout') < call_names.index('login'), \
+            "logout() must be called before user_login() to flush stale session"
 
     @pytest.mark.django_db
     def test_no_logout_when_header_absent(self, django_user_model):
