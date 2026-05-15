@@ -12,7 +12,9 @@ Run (from apps/api/):
 
 Design contract being tested
 -----------------------------
-- Reads HTTP_X_AUTH_REQUEST_EMAIL from request.META
+- Reads identity headers from request.META:
+    * HTTP_X_AUTH_REQUEST_EMAIL
+    * HTTP_X_AUTH_REQUEST_USER (fallback when email header is empty)
 - If path starts with a bypass prefix → pass through immediately (no DB, no login)
   Default bypass prefixes: ["/god-mode", "/api/instances"]
 - If request.user.is_authenticated:
@@ -20,8 +22,8 @@ Design contract being tested
     * proxy header asserts a DIFFERENT email → fall through and re-authenticate
       (defends against the "stale Django session survives upstream logout"
       class of bug — see TestProxyAuthMiddlewareUserSwitch)
-- If email header is absent (and no existing session) → pass through unauthenticated
-- If email is present → get_or_create User, create Profile on first creation,
+- If both identity headers are absent (and no existing session) → pass through unauthenticated
+- If identity can be derived from headers → get_or_create User, create Profile on first creation,
   then call user_login(request, user, is_app=True) to establish session
 - New users get: set_unusable_password(), is_password_autoset=True, is_email_verified=True
 - username is always uuid4().hex (never the Cognito sub — avoids length/collision issues)
