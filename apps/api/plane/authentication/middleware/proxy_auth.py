@@ -72,7 +72,7 @@ class ProxyAuthMiddleware:
             incoming = _normalise_email(proxy_email or "")
             if not incoming or current == incoming:
                 return self.get_response(request)
-            
+
             # Mismatch detected: proxy asserts a different identity than the
             # current session. Flush the stale session immediately so that if
             # subsequent re-auth fails (e.g., incoming user is inactive), the

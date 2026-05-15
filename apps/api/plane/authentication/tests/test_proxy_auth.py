@@ -208,10 +208,10 @@ class TestProxyAuthMiddlewareUserSwitch:
         asserts bob's identity.
         """
         alice = django_user_model.objects.create_user(
-            email="alice@example.com", username="alice", password="x",
+            email="alice@example.com", username="alice", password="x"
         )
         django_user_model.objects.create_user(
-            email="bob@example.com", username="bob", password="x", is_active=False,
+            email="bob@example.com", username="bob", password="x", is_active=False
         )
         middleware = make_middleware()
         request = make_request(
