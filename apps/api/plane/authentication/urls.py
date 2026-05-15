@@ -6,6 +6,7 @@ from django.urls import path
 
 from .views import (
     CSRFTokenEndpoint,
+    PortalSignOutEndpoint,
     SignOutAuthEndpoint,
     SignOutAuthSpaceEndpoint,
 )
@@ -36,6 +37,14 @@ urlpatterns = [
     # signout — kept active (used by frontend 3-layer logout)
     path("sign-out/", SignOutAuthEndpoint.as_view(), name="sign-out"),
     path("spaces/sign-out/", SignOutAuthSpaceEndpoint.as_view(), name="space-sign-out"),
+    # portal-driven signout — GET-able, CSRF-exempt, used by the foss-bundle
+    # portal's "Log out of all apps" redirect chain to clear the Django
+    # session cookie while the browser is on this app's domain.
+    path(
+        "portal-sign-out/",
+        PortalSignOutEndpoint.as_view(),
+        name="portal-sign-out",
+    ),
     # csrf token — kept active (Django forms need it)
     path("get-csrf-token/", CSRFTokenEndpoint.as_view(), name="get_csrf_token"),
 

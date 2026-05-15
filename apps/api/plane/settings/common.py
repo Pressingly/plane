@@ -62,6 +62,16 @@ INSTALLED_APPS = [
 # mPass proxy auth
 MPASS_BYPASS_PATHS = [p.strip() for p in os.environ.get("MPASS_BYPASS_PATHS", "").split(",") if p.strip()] or None
 DEFAULT_EMAIL_DOMAIN = os.environ.get("DEFAULT_EMAIL_DOMAIN", "askii.ai")
+# Allowlist for the ?next= parameter on /auth/portal-sign-out/ — comma-
+# separated host suffixes. Each entry matches its exact host plus all
+# subdomains (e.g. "foss.arbisoft.com" matches "pm.foss.arbisoft.com").
+# Empty list disables the endpoint's redirect behaviour (any ?next= is
+# rejected); the endpoint still flushes the Django session.
+MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = [
+    h.strip().lower().lstrip(".")
+    for h in os.environ.get("MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS", "").split(",")
+    if h.strip()
+]
 
 # SMB portal hostname segment (landing / logout redirects) vs default Plane workspace slug
 SMB_NAME = os.environ.get("SMB_NAME")

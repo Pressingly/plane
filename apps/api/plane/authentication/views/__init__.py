@@ -14,6 +14,7 @@ from .app.google import GoogleCallbackEndpoint, GoogleOauthInitiateEndpoint
 from .app.magic import MagicGenerateEndpoint, MagicSignInEndpoint, MagicSignUpEndpoint
 
 from .app.signout import SignOutAuthEndpoint
+from .app.portal_signout import PortalSignOutEndpoint
 
 
 from .space.email import SignInAuthSpaceEndpoint, SignUpAuthSpaceEndpoint
