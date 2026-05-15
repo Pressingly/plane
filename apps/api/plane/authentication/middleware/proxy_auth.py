@@ -55,30 +55,33 @@ class ProxyAuthMiddleware:
         )
 
     def __call__(self, request):
-        # Layer 2 session already valid — nothing to do.
-        if request.user.is_authenticated:
-            return self.get_response(request)
-
         # Bypass paths use their own auth (god-mode local login, instance admin).
         # TODO(mpass): Keep OPTIONS bypass at the proxy layer; add an app-level
         # fallback here only if preflight routing becomes inconsistent.
         if _is_bypass_path(request.path, self.bypass_paths):
             return self.get_response(request)
 
-        email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
-        if email and "@" not in email:
-            # Header holds a bare username (user_id_claim=cognito:username). Synth email.
-            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
-            email = f"{email}@{domain}"
-        if not email:
-            username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
-            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
-            if username:
-                email = f"{username}@{domain}"
-        if not email:
+        proxy_email = self._read_proxy_email(request)
+
+        if request.user.is_authenticated:
+            # Short-circuit only when the upstream-asserted identity matches the
+            # current Django session, or when no header is present (request did
+            # not pass through ForwardAuth — header absence is not a logout signal).
+            #
+            # If the proxy email differs (typical pattern: portal "log out of all
+            # apps" clears the shared _oauth2_proxy cookie + Cognito session but
+            # NOT this app's Django session cookie, then someone else logs in),
+            # fall through to re-authenticate. Django's login() flushes the stale
+            # session automatically when the user pk changes.
+            current = _normalise_email(request.user.email or "")
+            incoming = _normalise_email(proxy_email or "")
+            if not incoming or current == incoming:
+                return self.get_response(request)
+
+        if not proxy_email:
             return self.get_response(request)
 
-        email = _normalise_email(email)
+        email = _normalise_email(proxy_email)
         if not email:
             return self.get_response(request)
 
@@ -91,6 +94,31 @@ class ProxyAuthMiddleware:
 
         user_login(request=request, user=user, is_app=True)
         return self.get_response(request)
+
+    @staticmethod
+    def _read_proxy_email(request):
+        """Extract the upstream-asserted email from oauth2-proxy headers.
+
+        Handles two header shapes:
+          - X-Auth-Request-Email contains a real email → use as-is
+          - X-Auth-Request-Email contains a bare username (user_id_claim=
+            cognito:username) → synthesise <username>@DEFAULT_EMAIL_DOMAIN
+          - X-Auth-Request-Email is empty but X-Auth-Request-User has a username
+            → synthesise the same way
+
+        Returns the raw (un-normalised) email string, or "" if none could be
+        derived. Caller is responsible for `_normalise_email` before using.
+        """
+        email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
+        if email and "@" not in email:
+            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
+            email = f"{email}@{domain}"
+        if not email:
+            username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
+            if username:
+                domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
+                email = f"{username}@{domain}"
+        return email
 
     def _resolve_user(self, email):
         username_hint = email.split("@")[0] or uuid4().hex

@@ -13,10 +13,14 @@ Run (from apps/api/):
 Design contract being tested
 -----------------------------
 - Reads HTTP_X_AUTH_REQUEST_EMAIL from request.META
-- If request.user.is_authenticated → pass through immediately (no DB, no login)
 - If path starts with a bypass prefix → pass through immediately (no DB, no login)
   Default bypass prefixes: ["/god-mode", "/api/instances"]
-- If email header is absent → pass through unauthenticated
+- If request.user.is_authenticated:
+    * proxy header absent or matches request.user.email → short-circuit
+    * proxy header asserts a DIFFERENT email → fall through and re-authenticate
+      (defends against the "stale Django session survives upstream logout"
+      class of bug — see TestProxyAuthMiddlewareUserSwitch)
+- If email header is absent (and no existing session) → pass through unauthenticated
 - If email is present → get_or_create User, create Profile on first creation,
   then call user_login(request, user, is_app=True) to establish session
 - New users get: set_unusable_password(), is_password_autoset=True, is_email_verified=True
@@ -96,6 +100,88 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
         get_response.assert_called_once_with(request)
         mock_login.assert_not_called()
         assert User.objects.count() == count_before
+
+
+class TestProxyAuthMiddlewareUserSwitch:
+    """Stale Django session must not survive an upstream identity change."""
+
+    @pytest.mark.django_db
+    def test_logs_in_new_user_when_proxy_email_differs(self, django_user_model):
+        """
+        GIVEN  the current Django session belongs to alice
+               AND X-Auth-Request-Email = bob's email (oauth2-proxy now says bob)
+        WHEN   the middleware processes the request
+        THEN   user_login is called with bob (not short-circuited on alice)
+
+        Real-world repro: portal "log out of all apps" clears the shared
+        _oauth2_proxy cookie + Cognito session but NOT Plane's own Django
+        session cookie. The next user logs in upstream; this tab refreshes
+        and must re-bind to the new identity.
+        """
+        django_user_model.objects.create_user(
+            email="alice@example.com", username="alice", password="x",
+        )
+        bob = django_user_model.objects.create_user(
+            email="bob@example.com", username="bob", password="x",
+        )
+        alice = django_user_model.objects.get(email="alice@example.com")
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "bob@example.com"},
+            authenticated_user=alice,
+        )
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        mock_login.assert_called_once()
+        assert mock_login.call_args.kwargs["user"].pk == bob.pk
+
+    @pytest.mark.django_db
+    def test_no_logout_when_header_absent(self, django_user_model):
+        """
+        GIVEN  the current Django session belongs to alice
+               AND no X-Auth-Request-Email header is present
+        WHEN   the middleware processes the request
+        THEN   user_login is NOT called — header absence is not a logout signal.
+
+        Header absence can occur on internal requests, bypass paths reached
+        via redirect, or test paths. Treating it as "log out" would break
+        every such call.
+        """
+        alice = django_user_model.objects.create_user(
+            email="alice@example.com", username="alice", password="x",
+        )
+        middleware = make_middleware()
+        request = make_request(authenticated_user=alice)
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        mock_login.assert_not_called()
+
+    @pytest.mark.django_db
+    def test_match_is_case_and_whitespace_insensitive(self, django_user_model):
+        """
+        GIVEN  the current Django session belongs to alice@example.com
+               AND X-Auth-Request-Email = "  ALICE@example.com  "
+        WHEN   the middleware processes the request
+        THEN   user_login is NOT called — match comparison runs through the
+               same normalisation as user creation does.
+        """
+        alice = django_user_model.objects.create_user(
+            email="alice@example.com", username="alice", password="x",
+        )
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "  ALICE@example.com  "},
+            authenticated_user=alice,
+        )
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            middleware(request)
+
+        mock_login.assert_not_called()
 
 
 class TestProxyAuthMiddlewareNoHeader:
