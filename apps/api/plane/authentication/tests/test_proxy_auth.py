@@ -19,7 +19,8 @@ Design contract being tested
   Default bypass prefixes: ["/god-mode", "/api/instances"]
 - If request.user.is_authenticated:
     * proxy header absent or matches request.user.email → short-circuit
-    * proxy header asserts a DIFFERENT email → fall through and re-authenticate
+    * proxy header asserts a DIFFERENT email → logout() to flush the stale session,
+      then fall through and re-authenticate
       (defends against the "stale Django session survives upstream logout"
       class of bug — see TestProxyAuthMiddlewareUserSwitch)
 - If both identity headers are absent (and no existing session) → pass through unauthenticated
@@ -113,7 +114,8 @@ class TestProxyAuthMiddlewareUserSwitch:
         GIVEN  the current Django session belongs to alice
                AND X-Auth-Request-Email = bob's email (oauth2-proxy now says bob)
         WHEN   the middleware processes the request
-        THEN   user_login is called with bob (not short-circuited on alice)
+        THEN   logout() is called to flush alice's stale session
+               AND user_login is called with bob (not short-circuited on alice)
 
         Real-world repro: portal "log out of all apps" clears the shared
         _oauth2_proxy cookie + Cognito session but NOT Plane's own Django
@@ -133,9 +135,13 @@ class TestProxyAuthMiddlewareUserSwitch:
             authenticated_user=alice,
         )
 
-        with patch(PATCH_USER_LOGIN) as mock_login:
+        with patch(PATCH_USER_LOGIN) as mock_login, \
+             patch("plane.authentication.middleware.proxy_auth.logout") as mock_logout:
             middleware(request)
 
+        # Session should be flushed when mismatch is detected
+        mock_logout.assert_called_once_with(request)
+        # Then re-auth with the new user
         mock_login.assert_called_once()
         assert mock_login.call_args.kwargs["user"].pk == bob.pk
 
@@ -183,6 +189,43 @@ class TestProxyAuthMiddlewareUserSwitch:
         with patch(PATCH_USER_LOGIN) as mock_login:
             middleware(request)
 
+        mock_login.assert_not_called()
+
+    @pytest.mark.django_db
+    def test_flushes_session_when_incoming_user_is_inactive(self, django_user_model):
+        """
+        GIVEN  the current Django session belongs to alice (active)
+               AND X-Auth-Request-Email = bob's email
+               AND bob exists but is_active=False
+        WHEN   the middleware processes the request
+        THEN   logout() is called to flush alice's session
+               AND user_login is NOT called (bob is inactive)
+               AND the request proceeds as unauthenticated
+
+        This prevents a stale session from surviving when re-auth fails.
+        Without the explicit logout(), alice's session would remain active
+        and the request would proceed as alice even though the proxy now
+        asserts bob's identity.
+        """
+        alice = django_user_model.objects.create_user(
+            email="alice@example.com", username="alice", password="x",
+        )
+        django_user_model.objects.create_user(
+            email="bob@example.com", username="bob", password="x", is_active=False,
+        )
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "bob@example.com"},
+            authenticated_user=alice,
+        )
+
+        with patch(PATCH_USER_LOGIN) as mock_login, \
+             patch("plane.authentication.middleware.proxy_auth.logout") as mock_logout:
+            middleware(request)
+
+        # Session should be flushed when mismatch is detected
+        mock_logout.assert_called_once_with(request)
+        # user_login should NOT be called because bob is inactive
         mock_login.assert_not_called()
 
 

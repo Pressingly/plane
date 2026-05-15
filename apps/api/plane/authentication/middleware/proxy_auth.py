@@ -5,6 +5,7 @@
 from uuid import uuid4
 
 from django.conf import settings
+from django.contrib.auth import logout
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError
 
@@ -67,16 +68,17 @@ class ProxyAuthMiddleware:
             # Short-circuit only when the upstream-asserted identity matches the
             # current Django session, or when no header is present (request did
             # not pass through ForwardAuth — header absence is not a logout signal).
-            #
-            # If the proxy email differs (typical pattern: portal "log out of all
-            # apps" clears the shared _oauth2_proxy cookie + Cognito session but
-            # NOT this app's Django session cookie, then someone else logs in),
-            # fall through to re-authenticate. Django's login() flushes the stale
-            # session automatically when the user pk changes.
             current = _normalise_email(request.user.email or "")
             incoming = _normalise_email(proxy_email or "")
             if not incoming or current == incoming:
                 return self.get_response(request)
+            
+            # Mismatch detected: proxy asserts a different identity than the
+            # current session. Flush the stale session immediately so that if
+            # subsequent re-auth fails (e.g., incoming user is inactive), the
+            # request proceeds as unauthenticated rather than retaining the
+            # previous user's identity.
+            logout(request)
 
         if not proxy_email:
             return self.get_response(request)
