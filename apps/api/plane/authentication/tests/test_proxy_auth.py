@@ -215,7 +215,7 @@ class TestProxyAuthMiddlewareUserSwitch:
         WHEN   the middleware processes the request
         THEN   logout() is called to flush alice's session
                AND user_login is NOT called (bob is inactive)
-               AND the request proceeds as unauthenticated
+               AND the request proceeds without re-authentication
 
         This prevents a stale session from surviving when re-auth fails.
         Without the explicit logout(), alice's session would remain active
@@ -228,7 +228,15 @@ class TestProxyAuthMiddlewareUserSwitch:
         django_user_model.objects.create_user(
             email="bob@example.com", username="bob", password="x", is_active=False
         )
-        middleware = make_middleware()
+        
+        # Capture what request object get_response receives
+        received_request = None
+        def capture_get_response(req):
+            nonlocal received_request
+            received_request = req
+            return MagicMock(status_code=200)
+        
+        middleware = make_middleware(get_response=capture_get_response)
         request = make_request(
             meta={"HTTP_X_AUTH_REQUEST_EMAIL": "bob@example.com"},
             authenticated_user=alice,
@@ -242,6 +250,9 @@ class TestProxyAuthMiddlewareUserSwitch:
         mock_logout.assert_called_once_with(request)
         # user_login should NOT be called because bob is inactive
         mock_login.assert_not_called()
+        # Verify get_response was called with the request (middleware didn't block it)
+        assert received_request is request, \
+            "Middleware should pass the request to get_response after logout"
 
 
 class TestProxyAuthMiddlewareNoHeader:
