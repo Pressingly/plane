@@ -43,6 +43,7 @@ from plane.authentication.middleware.proxy_auth import ProxyAuthMiddleware
 from plane.db.models import User, Profile
 
 PATCH_USER_LOGIN = "plane.authentication.middleware.proxy_auth.user_login"
+PATCH_LOGOUT = "plane.authentication.middleware.proxy_auth.logout"
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +137,7 @@ class TestProxyAuthMiddlewareUserSwitch:
         )
 
         with patch(PATCH_USER_LOGIN) as mock_login, \
-             patch("plane.authentication.middleware.proxy_auth.logout") as mock_logout:
+             patch(PATCH_LOGOUT) as mock_logout:
             middleware(request)
 
         # Session should be flushed when mismatch is detected
@@ -220,7 +221,7 @@ class TestProxyAuthMiddlewareUserSwitch:
         )
 
         with patch(PATCH_USER_LOGIN) as mock_login, \
-             patch("plane.authentication.middleware.proxy_auth.logout") as mock_logout:
+             patch(PATCH_LOGOUT) as mock_logout:
             middleware(request)
 
         # Session should be flushed when mismatch is detected
