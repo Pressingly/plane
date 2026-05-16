@@ -83,7 +83,7 @@ record() {
 
 escape_markdown_cell() {
   local cell=$1
-  cell=${cell//|/\\|}
+  cell=${cell//|/&#124;}
   cell=${cell//$'\n'/'<br>'}
   printf '%s' "$cell"
 }
