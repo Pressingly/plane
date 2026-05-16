@@ -102,7 +102,7 @@ check_row_14() {
     return
   fi
 
-  record 0 "✅" "$LOGOUT_SPA does not invoke \`/oauth2/sign_out\` — navigation-only logout shape preserved"
+  record 0 "✅" "$LOGOUT_SPA does not invoke \`/oauth2/sign_out\` (this row verifies only that the SPA doesn't try to clear the upstream proxy cookie itself; that's the portal's job. The SPA MAY still POST \`/auth/sign-out/\` — tolerated drift, see logout-flow spec)"
 }
 
 # ============================================================================
