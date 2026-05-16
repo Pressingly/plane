@@ -82,6 +82,8 @@ record() {
 }
 
 escape_markdown_cell() {
+  # Escape table-sensitive characters so notes render as a single markdown cell.
+  # Input: arbitrary note text. Output: `|` as HTML entity + newlines as <br>.
   local cell=$1
   cell=${cell//|/&#124;}
   cell=${cell//$'\n'/'<br>'}
