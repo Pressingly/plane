@@ -5,6 +5,7 @@
 from uuid import uuid4
 
 from django.conf import settings
+from django.contrib.auth import logout
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError
 
@@ -55,30 +56,29 @@ class ProxyAuthMiddleware:
         )
 
     def __call__(self, request):
-        # Layer 2 session already valid — nothing to do.
-        if request.user.is_authenticated:
-            return self.get_response(request)
-
         # Bypass paths use their own auth (god-mode local login, instance admin).
         # TODO(mpass): Keep OPTIONS bypass at the proxy layer; add an app-level
         # fallback here only if preflight routing becomes inconsistent.
         if _is_bypass_path(request.path, self.bypass_paths):
             return self.get_response(request)
 
-        email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
-        if email and "@" not in email:
-            # Header holds a bare username (user_id_claim=cognito:username). Synth email.
-            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
-            email = f"{email}@{domain}"
-        if not email:
-            username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
-            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
-            if username:
-                email = f"{username}@{domain}"
-        if not email:
-            return self.get_response(request)
+        email = _normalise_email(self._read_proxy_email(request))
 
-        email = _normalise_email(email)
+        if request.user.is_authenticated:
+            # Short-circuit only when the upstream-asserted identity matches the
+            # current Django session, or when no header is present (request did
+            # not pass through ForwardAuth — header absence is not a logout signal).
+            current = _normalise_email(request.user.email or "")
+            if not email or current == email:
+                return self.get_response(request)
+
+            # Mismatch detected: proxy asserts a different identity than the
+            # current session. Flush the stale session immediately so that if
+            # subsequent re-auth fails (e.g., incoming user is inactive), the
+            # request proceeds as unauthenticated rather than retaining the
+            # previous user's identity.
+            logout(request)
+
         if not email:
             return self.get_response(request)
 
@@ -91,6 +91,38 @@ class ProxyAuthMiddleware:
 
         user_login(request=request, user=user, is_app=True)
         return self.get_response(request)
+
+    @staticmethod
+    def _read_proxy_email(request):
+        """Extract the upstream-asserted email from oauth2-proxy headers.
+
+        Handles three cases:
+          - X-Auth-Request-Email contains a real email → use as-is
+          - X-Auth-Request-Email contains a bare username (user_id_claim=
+            cognito:username) → synthesise <username>@DEFAULT_EMAIL_DOMAIN
+          - X-Auth-Request-Email is empty but X-Auth-Request-User has a username
+            → synthesise the same way
+
+        Returns the raw (un-normalised) email string, or "" if none could be
+        derived. Caller is responsible for `_normalise_email` before using.
+
+        TODO(security): the bare-username synthesis paths let a Cognito
+        principal whose username collides with a real Plane user's email
+        local-part impersonate that user (e.g. `cognito:username=alice` →
+        synthesised to `alice@askii.ai` → resolves to an existing `alice@askii.ai`
+        Plane user). The defensive fix is to drop these synthesis paths and
+        require a real email claim from the upstream proxy.
+        """
+        email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
+        if email and "@" not in email:
+            domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
+            email = f"{email}@{domain}"
+        if not email:
+            username = (request.META.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
+            if username:
+                domain = getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
+                email = f"{username}@{domain}"
+        return email
 
     def _resolve_user(self, email):
         username_hint = email.split("@")[0] or uuid4().hex
