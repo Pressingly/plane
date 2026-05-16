@@ -1,0 +1,68 @@
+name: SSO fork audit
+
+# Runs scripts/sso-audit.sh against this fork's auth code to verify
+# satisfaction of the cross-app SSO contract at
+# awais786/sso-rules-moneta:openspec/specs/proxy-auth-middleware/spec.md.
+#
+# Covers the fork-side rows that foss-server-bundle-devstack's CI can't
+# check (no fork code on disk in the bundle): today rows 14, 20, 21 from
+# SKILL.md §5. Exits 1 on security-critical violations (row 20 — session-
+# identity reconciliation) so the merge gate blocks the stale-session
+# leak class of bug.
+#
+# When upstream sso-rules-moneta adds a new fork-side row, vendor the
+# updated check into scripts/sso-audit.sh and re-run this workflow.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/api/plane/authentication/**'
+      - 'apps/web/core/store/user/**'
+      - 'apps/web/core/services/auth.service.ts'
+      - 'apps/web/core/lib/wrappers/authentication-wrapper.tsx'
+      - 'scripts/sso-audit.sh'
+      - '.github/workflows/sso-audit.yml'
+  push:
+    branches: [foss-main]
+  schedule:
+    # 09:00 UTC every Monday — pre-week sanity check
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  sso-fork-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run fork audit
+        id: audit
+        run: |
+          set -o pipefail
+          if bash scripts/sso-audit.sh | tee audit-output.md; then
+            echo "audit_exit=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "audit_exit=$?" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to job summary
+        if: always()
+        run: cat audit-output.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post sticky PR comment
+        if: github.event_name == 'pull_request' && always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: sso-fork-audit
+          path: audit-output.md
+
+      - name: Fail on security-critical violations
+        if: steps.audit.outputs.audit_exit != '0'
+        run: |
+          echo "::error::Security-critical SSO contract violation in fork audit. See table for the failing row and fix."
+          exit 1
