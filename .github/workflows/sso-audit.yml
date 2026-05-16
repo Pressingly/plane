@@ -55,7 +55,18 @@ jobs:
         run: cat audit-output.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Post sticky PR comment
-        if: github.event_name == 'pull_request' && always()
+        # Skip on fork PRs — GitHub provides a read-only token there even
+        # when the workflow declares `pull-requests: write`, and the
+        # marocchino action would fail and mark the whole workflow red
+        # even if the audit itself passed. Same-repo branch PRs always
+        # have write access. `continue-on-error` is a defensive belt — if
+        # the comment-posting fails for any other reason (rate limit, etc.)
+        # the audit gate itself is unaffected.
+        if: |
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          always()
+        continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: sso-fork-audit

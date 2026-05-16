@@ -23,10 +23,12 @@
 #       identity-leak class of bug.
 #
 # Rows covered:
-#   Row 14 — logout shape: SPA logout MUST NOT call /oauth2/sign_out, MUST
-#            redirect to portal host (env-supplied or 4-label regex), MUST
-#            NOT POST /auth/sign-out/ (per logout-flow spec §"Per-app
-#            'Logout' SHALL be navigation-only"; tolerated as drift today).
+#   Row 14 — logout shape: SPA logout file MUST NOT call /oauth2/sign_out.
+#            (The portal-host redirect target and the no-POST-/auth/sign-out/
+#            properties from logout-flow spec are NOT checked here — they
+#            need either runtime context or AST-level analysis. The bash
+#            audit covers only the literal /oauth2/sign_out grep, which is
+#            the most common regression vector.)
 #   Row 20 — session-identity reconciliation (Rule 2 mismatch flush):
 #            proxy_auth.py MUST call django.contrib.auth.logout(request)
 #            on identity mismatch. Without this, the stale-session-on-user-
@@ -49,7 +51,7 @@ LOGOUT_SPA="apps/web/core/store/user/index.ts"
 # Output state — populated by each check_row_N function, printed at the end.
 declare -a ROW_STATUS=()
 declare -a ROW_TITLES=(
-  "logout shape: no /oauth2/sign_out, navigation-only redirect"
+  "logout shape: SPA logout does not call /oauth2/sign_out"
   "session-identity reconciliation present (Rule 2 mismatch flush)"
   "email-shape detection uses substring/indexOf, not polynomial regex"
 )
@@ -79,12 +81,13 @@ record() {
 }
 
 # ============================================================================
-# Row 14 (idx 0): logout shape
+# Row 14 (idx 0): logout shape — narrow check
 #
 # SPA logout MUST NOT contain `/oauth2/sign_out` literal — the bundle's
-# logout model is navigation-only. Per logout-flow §"Per-app 'Logout' SHALL
-# be navigation-only", a future ideal also drops the POST /auth/sign-out/
-# call, but that's tolerated drift today, so we don't fail on it.
+# logout model is navigation-only at the per-app layer. The portal handles
+# oauth2-proxy clearing. This check enforces only that property; the other
+# properties from logout-flow spec (portal-host redirect target, no POST
+# /auth/sign-out/) are not verified here.
 # ============================================================================
 check_row_14() {
   if [[ ! -f "$LOGOUT_SPA" ]]; then
@@ -105,13 +108,25 @@ check_row_14() {
 # ============================================================================
 # Row 20 (idx 1): session-identity reconciliation
 #
-# proxy_auth.py MUST call django.contrib.auth.logout(request) (imported as
-# `logout` or aliased) on identity mismatch. The presence of the import +
+# proxy_auth.py MUST call django.contrib.auth.logout (imported as `logout` or
+# under any local alias) on identity mismatch. The presence of the import +
 # call is the deterministic signal; the bash audit can't verify the call
 # site's *position* relative to the mismatch detection, only that it exists.
 # That's a spec-conformance approximation; the test suite at
 # apps/api/plane/authentication/tests/test_proxy_auth.py pins the exact
 # behaviour.
+#
+# The detection is resilient to:
+#   - whitespace around the argument: `logout(request)`, `logout( request )`,
+#     `logout(\nrequest\n)`
+#   - keyword form: `logout(request=request)`
+#   - parenthesized multiline imports:
+#       from django.contrib.auth import (
+#           login,
+#           logout,
+#       )
+#   - aliased imports: `from django.contrib.auth import logout as django_logout`
+#   - mixed imports on one line: `from django.contrib.auth import login, logout`
 #
 # SECURITY-CRITICAL: without this call, the stale-session leak returns.
 # ============================================================================
@@ -121,25 +136,42 @@ check_row_20() {
     return
   fi
 
-  # Detect either `from django.contrib.auth import logout` (any form) or
-  # an aliased import that brings `logout` into scope, plus a call site.
-  local has_import
-  has_import=$(grep -cE '^from django\.contrib\.auth import (.*\b)?logout(\b.*)?$|^from django\.contrib\.auth import logout as ' "$PROXY_AUTH" || true)
+  # Resolve the in-scope name for django.contrib.auth.logout.
+  # If the file imports it under an alias, use that. Otherwise default to
+  # `logout`. Use python -c so we correctly handle multiline parenthesized
+  # imports without trying to write a multi-line regex in bash.
+  local logout_name
+  logout_name=$(python3 - "$PROXY_AUTH" <<'PY' 2>/dev/null || true
+import ast, sys
+src = open(sys.argv[1]).read()
+try:
+    tree = ast.parse(src)
+except SyntaxError:
+    sys.exit(0)
+for node in ast.walk(tree):
+    if isinstance(node, ast.ImportFrom) and node.module == "django.contrib.auth":
+        for alias in node.names:
+            if alias.name == "logout":
+                print(alias.asname or "logout")
+                sys.exit(0)
+PY
+)
 
-  local has_call
-  has_call=$(grep -cE '\blogout\(request\)|\bdjango_logout\(request\)' "$PROXY_AUTH" || true)
-
-  if [[ "$has_import" -gt 0 && "$has_call" -gt 0 ]]; then
-    record 1 "✅" "django.contrib.auth.logout imported and invoked at least once in $PROXY_AUTH — Rule 2 mismatch flush in place"
+  if [[ -z "$logout_name" ]]; then
+    record 1 "❌" "$PROXY_AUTH does NOT import django.contrib.auth.logout. The cross-app spec (proxy-auth-middleware Rule 2) requires the middleware to call logout(request) when the proxy header asserts a different identity than the existing Django session. Without it, the stale-session-on-user-switch leak returns. Fix: add \`from django.contrib.auth import logout\` AND invoke \`logout(request)\` immediately on mismatch, before any bail-out path."
     return
   fi
 
-  if [[ "$has_import" -eq 0 ]]; then
-    record 1 "❌" "$PROXY_AUTH does NOT import django.contrib.auth.logout. The cross-app spec (proxy-auth-middleware Rule 2) requires the middleware to call logout(request) when the proxy header asserts a different identity than the existing Django session. Without it, the stale-session-on-user-switch leak returns. Fix: add \`from django.contrib.auth import logout\` (or aliased) AND invoke \`logout(request)\` immediately on mismatch, before any bail-out path."
+  # Look for a call to <logout_name>(...) anywhere in the file. The argument
+  # can include whitespace, line breaks, or `request=request` keyword form;
+  # the audit only cares that the call exists, not its exact shape.
+  local call_pattern="\\b${logout_name}[[:space:]]*\\("
+  if grep -qE "$call_pattern" "$PROXY_AUTH"; then
+    record 1 "✅" "django.contrib.auth.logout imported (as \`$logout_name\`) and invoked at least once in $PROXY_AUTH — Rule 2 mismatch flush in place"
     return
   fi
 
-  record 1 "❌" "$PROXY_AUTH imports django.contrib.auth.logout but never calls it. Fix: invoke \`logout(request)\` on identity mismatch before falling through to the unauthenticated path."
+  record 1 "❌" "$PROXY_AUTH imports django.contrib.auth.logout (as \`$logout_name\`) but never calls it. Fix: invoke \`$logout_name(request)\` on identity mismatch before falling through to the unauthenticated path."
 }
 
 # ============================================================================
@@ -187,8 +219,8 @@ check_row_21
 # ============================================================================
 echo "## Plane SSO Fork Audit"
 echo
-echo "Cross-app contract: \`awais786/sso-rules-moneta:openspec/specs/proxy-auth-middleware/spec.md\`"
-echo "Row numbers match \`skills/app-rules/SKILL.md\` §5 (the 21-row table)."
+echo "Cross-app contract: https://github.com/awais786/sso-rules-moneta/blob/main/openspec/specs/proxy-auth-middleware/spec.md"
+echo "Row numbers match the 21-row table at https://github.com/awais786/sso-rules-moneta/blob/main/skills/app-rules/SKILL.md#5-report"
 echo
 echo "| Row | Invariant | Status | Notes |"
 echo "|-----|-----------|--------|-------|"
