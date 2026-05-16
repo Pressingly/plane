@@ -81,6 +81,13 @@ record() {
   fi
 }
 
+escape_markdown_cell() {
+  local cell=$1
+  cell=${cell//|/\\|}
+  cell=${cell//$'\n'/'<br>'}
+  printf '%s' "$cell"
+}
+
 # ============================================================================
 # Row 14 (idx 0): logout shape — narrow check
 #
@@ -234,8 +241,9 @@ echo
 echo "| Row | Invariant | Status | Notes |"
 echo "|-----|-----------|--------|-------|"
 for i in "${!ROW_TITLES[@]}"; do
+  note="$(escape_markdown_cell "${ROW_NOTES[$i]:-}")"
   printf "| %d | %s | %s | %s |\n" \
-    "${ROW_NUMBERS[$i]}" "${ROW_TITLES[$i]}" "${ROW_STATUS[$i]:-?}" "${ROW_NOTES[$i]:-}"
+    "${ROW_NUMBERS[$i]}" "${ROW_TITLES[$i]}" "${ROW_STATUS[$i]:-?}" "$note"
 done
 echo
 
