@@ -17,7 +17,8 @@
 # /sso-rules:audit-all-apps slash command.
 #
 # Exit codes:
-#   0 — all rows ✅ or n/a / informational
+#   0 — no SECURITY-CRITICAL rows failed. Non-security rows may still be
+#       reported as ❌; those findings are informational/non-gating.
 #   1 — at least one SECURITY-CRITICAL row failed (today: row 20 session-
 #       identity reconciliation). These violations re-open the cross-user
 #       identity-leak class of bug.
