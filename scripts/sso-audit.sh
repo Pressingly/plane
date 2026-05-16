@@ -165,7 +165,15 @@ PY
   # Look for a call to <logout_name>(...) anywhere in the file. The argument
   # can include whitespace, line breaks, or `request=request` keyword form;
   # the audit only cares that the call exists, not its exact shape.
-  local call_pattern="\\b${logout_name}[[:space:]]*\\("
+  #
+  # Portable word boundary at the start: `(^|[^[:alnum:]_])` matches either
+  # start-of-line or any non-word character before the alias name. Using
+  # POSIX character classes rather than `\b` because `\b` is a GNU extension
+  # to `grep -E` and is undefined on BSD/POSIX strict implementations
+  # (`grep` on macOS, busybox, Alpine, etc. may interpret it as literal
+  # backspace or just `b`). The right side doesn't need a boundary because
+  # `[[:space:]]*\(` already requires the next non-space char to be `(`.
+  local call_pattern="(^|[^[:alnum:]_])${logout_name}[[:space:]]*\\("
   if grep -qE "$call_pattern" "$PROXY_AUTH"; then
     record 1 "✅" "django.contrib.auth.logout imported (as \`$logout_name\`) and invoked at least once in $PROXY_AUTH — Rule 2 mismatch flush in place"
     return
