@@ -75,7 +75,7 @@ class TestPortalSignOutEndpoint:
     def test_redirects_to_allowlisted_next(
         self, mock_settings, mock_logout, factory, view
     ):
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = ["foss.arbisoft.com"]
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
         next_url = "https://docs.foss.arbisoft.com/auth/portal-sign-out/"
 
         response = view.get(_make_request(factory, f"next={next_url}"))
@@ -89,7 +89,7 @@ class TestPortalSignOutEndpoint:
     def test_falls_back_to_mpass_signout_url_when_no_next(
         self, mock_settings, mock_logout, factory, view
     ):
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = ["foss.arbisoft.com"]
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
         mock_settings.MPASS_SIGNOUT_URL = "https://auth.foss.arbisoft.com/oauth2/sign_out"
 
         response = view.get(_make_request(factory))
@@ -103,7 +103,7 @@ class TestPortalSignOutEndpoint:
     def test_falls_back_to_root_when_no_next_and_no_mpass_url(
         self, mock_settings, mock_logout, factory, view
     ):
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = ["foss.arbisoft.com"]
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
         mock_settings.MPASS_SIGNOUT_URL = ""
 
         response = view.get(_make_request(factory))
@@ -117,7 +117,7 @@ class TestPortalSignOutEndpoint:
     def test_rejects_next_on_disallowed_host(
         self, mock_settings, mock_logout, factory, view
     ):
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = ["foss.arbisoft.com"]
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
 
         response = view.get(
             _make_request(factory, "next=https://evil.example/steal")
@@ -132,7 +132,7 @@ class TestPortalSignOutEndpoint:
         self, mock_settings, mock_logout, factory, view
     ):
         # "foss.arbisoft.com.evil" must not match the "foss.arbisoft.com" entry.
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = ["foss.arbisoft.com"]
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
 
         response = view.get(
             _make_request(factory, "next=https://foss.arbisoft.com.evil/x")
@@ -145,7 +145,7 @@ class TestPortalSignOutEndpoint:
     def test_subdomain_matches_suffix_entry(
         self, mock_settings, mock_logout, factory, view
     ):
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = ["foss.arbisoft.com"]
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
         next_url = "https://pm.foss.arbisoft.com/portal/done"
 
         response = view.get(_make_request(factory, f"next={next_url}"))
@@ -158,7 +158,7 @@ class TestPortalSignOutEndpoint:
     def test_empty_allowlist_rejects_all_next(
         self, mock_settings, mock_logout, factory, view
     ):
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = []
+        mock_settings.PLATFORM_DOMAIN = ""
 
         response = view.get(
             _make_request(factory, "next=https://docs.foss.arbisoft.com/x")
@@ -172,7 +172,7 @@ class TestPortalSignOutEndpoint:
         self, mock_settings, mock_logout, factory, view
     ):
         # Garbage URL: no hostname extractable → reject.
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = ["foss.arbisoft.com"]
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
 
         response = view.get(_make_request(factory, "next=not-a-url"))
 
@@ -185,7 +185,7 @@ class TestPortalSignOutEndpoint:
     ):
         # Operators sometimes write ".foss.arbisoft.com" — that leading dot
         # is stripped and the entry treated as a host suffix.
-        mock_settings.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = [".foss.arbisoft.com"]
+        mock_settings.PLATFORM_DOMAIN = ".foss.arbisoft.com"
         next_url = "https://pm.foss.arbisoft.com/done"
 
         response = view.get(_make_request(factory, f"next={next_url}"))

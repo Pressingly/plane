@@ -32,11 +32,11 @@ class PortalSignOutEndpoint(View):
     That's low impact (annoying, not destructive — the only state lost is
     the session itself, and re-auth via ForwardAuth is automatic).
 
-    The ``next`` URL is validated against
-    ``MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS`` to prevent this endpoint from
-    being weaponised as an open redirect. Each allowlist entry is a host
-    suffix; ``foss.arbisoft.com`` matches ``pm.foss.arbisoft.com``,
-    ``docs.foss.arbisoft.com``, etc., but does not match
+    The ``next`` URL is validated against ``PLATFORM_DOMAIN`` (set by
+    foss-server-bundle/platform.sh) to prevent this endpoint from being
+    weaponised as an open redirect. The URL's host must equal
+    ``PLATFORM_DOMAIN`` exactly or be a subdomain of it. Dot boundary
+    enforced: ``foss.arbisoft.com`` matches subdomains but NOT
     ``foss.arbisoft.com.evil.example``.
     """
 
@@ -48,7 +48,7 @@ class PortalSignOutEndpoint(View):
         if next_url:
             if not self._is_allowed_next(next_url):
                 return HttpResponseBadRequest(
-                    "next= target host is not in MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS"
+                    "next= target host is not a subdomain of PLATFORM_DOMAIN"
                 )
             return HttpResponseRedirect(next_url)
 
@@ -59,14 +59,17 @@ class PortalSignOutEndpoint(View):
 
     @staticmethod
     def _is_allowed_next(url):
-        """True iff the URL's hostname matches an entry in the allowlist.
+        """True iff the URL's host equals PLATFORM_DOMAIN or is a subdomain.
 
-        Allowlist entries are matched as suffixes on a dot boundary:
-        ``foss.arbisoft.com`` matches ``foss.arbisoft.com`` and
-        ``*.foss.arbisoft.com``, but not ``foss.arbisoft.com.evil``.
+        Suffix match enforces a dot boundary: ``foss.arbisoft.com``
+        matches ``foss.arbisoft.com`` and ``*.foss.arbisoft.com``, but
+        not ``foss.arbisoft.com.evil``. Unset PLATFORM_DOMAIN → False
+        (every next= rejected).
         """
-        allowed = getattr(settings, "MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS", []) or []
-        if not allowed:
+        platform_domain = (
+            getattr(settings, "PLATFORM_DOMAIN", "") or ""
+        ).strip().lower().lstrip(".")
+        if not platform_domain:
             return False
 
         try:
@@ -77,10 +80,4 @@ class PortalSignOutEndpoint(View):
             return False
 
         host = host.lower()
-        for entry in allowed:
-            entry = (entry or "").strip().lower().lstrip(".")
-            if not entry:
-                continue
-            if host == entry or host.endswith("." + entry):
-                return True
-        return False
+        return host == platform_domain or host.endswith("." + platform_domain)
