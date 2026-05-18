@@ -109,9 +109,7 @@ build/
 build/
 .react-router/
 temp/
-scripts/*
-# Tracked exceptions inside scripts/ — vendored or fork-specific CI tooling.
-!scripts/sso-audit.sh
+scripts/
 
 # SSO design specs (implemented, code is source of truth)
 docs/cognito_*.md
