@@ -2,18 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
-# Django imports
+from urllib.parse import urlparse
+
 from django.views import View
 from django.contrib.auth import logout
 from django.conf import settings
-from django.http import HttpResponseRedirect
+from django.http import HttpResponseBadRequest, HttpResponseRedirect
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 
-# Module imports
 from plane.authentication.utils.host import user_ip, base_host
 from plane.db.models import User
 
 
+@method_decorator(csrf_exempt, name="dispatch")
 class SignOutAuthEndpoint(View):
     def post(self, request):
         try:
@@ -24,15 +27,45 @@ class SignOutAuthEndpoint(View):
         except Exception:
             pass
         finally:
-            # Always clear the Django session, even if user lookup/save failed
             logout(request)
 
-        # If SSO (mPass) sign-out URL is configured, redirect there to also
-        # clear the shared oauth2-proxy session and Cognito session.
-        # Without this, the next request immediately re-authenticates the user
-        # via Traefik ForwardAuth.
         mpass_signout_url = getattr(settings, "MPASS_SIGNOUT_URL", None)
         if mpass_signout_url:
             return HttpResponseRedirect(mpass_signout_url)
-
         return HttpResponseRedirect(base_host(request=request, is_app=True))
+
+    def get(self, request):
+        # Delegate to POST so last_logout_ip/_time get tracked and the
+        # session is flushed the same way. Only override the redirect
+        # target if ?next= was passed (portal logout-chain hop).
+        response = self.post(request)
+
+        next_url = (request.GET.get("next") or "").strip()
+        if not next_url:
+            return response
+
+        if not self._is_allowed_next(next_url):
+            return HttpResponseBadRequest(
+                "next= host is not a subdomain of PLATFORM_DOMAIN"
+            )
+        return HttpResponseRedirect(next_url)
+
+    @staticmethod
+    def _is_allowed_next(url):
+        # Suffix match enforces a dot boundary so foss.arbisoft.com.evil
+        # does NOT match the foss.arbisoft.com PLATFORM_DOMAIN.
+        platform_domain = (
+            getattr(settings, "PLATFORM_DOMAIN", "") or ""
+        ).strip().lower().lstrip(".")
+        if not platform_domain:
+            return False
+
+        try:
+            host = urlparse(url).hostname
+        except ValueError:
+            return False
+        if not host:
+            return False
+
+        host = host.lower()
+        return host == platform_domain or host.endswith("." + platform_domain)
