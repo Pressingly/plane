@@ -6,7 +6,6 @@ from django.urls import path
 
 from .views import (
     CSRFTokenEndpoint,
-    PortalSignOutEndpoint,
     SignOutAuthEndpoint,
     SignOutAuthSpaceEndpoint,
 )
@@ -34,17 +33,12 @@ from .views import (
 # GiteaOauthInitiateSpaceEndpoint, GiteaCallbackSpaceEndpoint,
 
 urlpatterns = [
-    # signout — kept active (used by frontend 3-layer logout)
+    # signout — POST for in-app logout, GET (?next=) for the foss-bundle
+    # portal's "Log out of all apps" redirect chain. Both methods flush
+    # the Django session via the same django.contrib.auth.logout() call;
+    # GET is CSRF-exempt with PLATFORM_DOMAIN-bounded ?next= validation.
     path("sign-out/", SignOutAuthEndpoint.as_view(), name="sign-out"),
     path("spaces/sign-out/", SignOutAuthSpaceEndpoint.as_view(), name="space-sign-out"),
-    # portal-driven signout — GET-able, CSRF-exempt, used by the foss-bundle
-    # portal's "Log out of all apps" redirect chain to clear the Django
-    # session cookie while the browser is on this app's domain.
-    path(
-        "portal-sign-out/",
-        PortalSignOutEndpoint.as_view(),
-        name="portal-sign-out",
-    ),
     # csrf token — kept active (Django forms need it)
     path("get-csrf-token/", CSRFTokenEndpoint.as_view(), name="get_csrf_token"),
 

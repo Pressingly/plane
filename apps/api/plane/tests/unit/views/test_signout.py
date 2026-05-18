@@ -129,3 +129,125 @@ class TestSignOutAuthEndpoint:
 
         assert response.status_code == 302
         assert response["Location"] == _BASE_HOST
+
+
+# GET /auth/sign-out/?next=<url> — portal logout-chain entry point
+# ────────────────────────────────────────────────────────────────
+
+
+def _make_get_request(factory: RequestFactory, qs: str = "") -> MagicMock:
+    url = "/auth/sign-out/" + (f"?{qs}" if qs else "")
+    req = factory.get(url)
+    req.user = MagicMock(id="user-uuid-1234")
+    return req
+
+
+@pytest.mark.unit
+class TestSignOutAuthEndpointGet:
+    """The GET variant: portal-driven logout chain.
+
+    Same `_flush_session()` body as POST. Differences:
+      - ?next= allowlist validated against PLATFORM_DOMAIN (host equality
+        or dot-bounded subdomain).
+      - CSRF-exempt (set at the class level via @method_decorator).
+      - Falls back to MPASS_SIGNOUT_URL or base_host when ?next= is
+        missing / invalid.
+    """
+
+    @patch("plane.authentication.views.app.signout.base_host", return_value=_BASE_HOST)
+    @patch("plane.authentication.views.app.signout.logout")
+    @patch("plane.authentication.views.app.signout.User")
+    @patch("plane.authentication.views.app.signout.settings")
+    def test_redirects_to_allowlisted_next(
+        self, mock_settings, mock_user_cls, mock_logout, mock_base_host, factory, view
+    ):
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
+        mock_user_cls.objects.get.return_value = MagicMock()
+        next_url = "https://docs.foss.arbisoft.com/auth/sign-out/"
+
+        response = view.get(_make_get_request(factory, f"next={next_url}"))
+
+        mock_logout.assert_called_once()  # GET still flushes the session
+        assert response.status_code == 302
+        assert response["Location"] == next_url
+
+    @patch("plane.authentication.views.app.signout.base_host", return_value=_BASE_HOST)
+    @patch("plane.authentication.views.app.signout.logout")
+    @patch("plane.authentication.views.app.signout.User")
+    @patch("plane.authentication.views.app.signout.settings")
+    def test_rejects_next_on_disallowed_host(
+        self, mock_settings, mock_user_cls, mock_logout, mock_base_host, factory, view
+    ):
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
+        mock_user_cls.objects.get.return_value = MagicMock()
+
+        response = view.get(
+            _make_get_request(factory, "next=https://evil.example/steal")
+        )
+
+        mock_logout.assert_called_once()  # session still flushed
+        assert response.status_code == 400
+
+    @patch("plane.authentication.views.app.signout.base_host", return_value=_BASE_HOST)
+    @patch("plane.authentication.views.app.signout.logout")
+    @patch("plane.authentication.views.app.signout.User")
+    @patch("plane.authentication.views.app.signout.settings")
+    def test_suffix_match_enforces_dot_boundary(
+        self, mock_settings, mock_user_cls, mock_logout, mock_base_host, factory, view
+    ):
+        """foss.arbisoft.com.evil must not match foss.arbisoft.com."""
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
+        mock_user_cls.objects.get.return_value = MagicMock()
+
+        response = view.get(
+            _make_get_request(factory, "next=https://foss.arbisoft.com.evil/x")
+        )
+
+        assert response.status_code == 400
+
+    @patch("plane.authentication.views.app.signout.base_host", return_value=_BASE_HOST)
+    @patch("plane.authentication.views.app.signout.logout")
+    @patch("plane.authentication.views.app.signout.User")
+    @patch("plane.authentication.views.app.signout.settings")
+    def test_empty_platform_domain_rejects_all_next(
+        self, mock_settings, mock_user_cls, mock_logout, mock_base_host, factory, view
+    ):
+        mock_settings.PLATFORM_DOMAIN = ""
+        mock_user_cls.objects.get.return_value = MagicMock()
+
+        response = view.get(
+            _make_get_request(factory, "next=https://docs.foss.arbisoft.com/x")
+        )
+
+        assert response.status_code == 400
+
+    @patch("plane.authentication.views.app.signout.base_host", return_value=_BASE_HOST)
+    @patch("plane.authentication.views.app.signout.logout")
+    @patch("plane.authentication.views.app.signout.User")
+    @patch("plane.authentication.views.app.signout.settings")
+    def test_no_next_falls_back_to_mpass_url(
+        self, mock_settings, mock_user_cls, mock_logout, mock_base_host, factory, view
+    ):
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
+        mock_settings.MPASS_SIGNOUT_URL = _MPASS_URL
+        mock_user_cls.objects.get.return_value = MagicMock()
+
+        response = view.get(_make_get_request(factory))
+
+        mock_logout.assert_called_once()
+        assert response.status_code == 302
+        assert response["Location"] == _MPASS_URL
+
+    @patch("plane.authentication.views.app.signout.base_host", return_value=_BASE_HOST)
+    @patch("plane.authentication.views.app.signout.logout")
+    @patch("plane.authentication.views.app.signout.User")
+    @patch("plane.authentication.views.app.signout.settings")
+    def test_malformed_next_is_rejected(
+        self, mock_settings, mock_user_cls, mock_logout, mock_base_host, factory, view
+    ):
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
+        mock_user_cls.objects.get.return_value = MagicMock()
+
+        response = view.get(_make_get_request(factory, "next=:::garbage"))
+
+        assert response.status_code == 400
