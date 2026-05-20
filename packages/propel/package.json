@@ -1,6 +1,6 @@
 {
   "name": "@plane/propel",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "private": true,
   "license": "AGPL-3.0",
   "type": "module",
@@ -50,7 +50,7 @@
     "./styles/react-day-picker": "./dist/styles/react-day-picker.css"
   },
   "scripts": {
-    "dev": "tsdown --watch",
+    "dev": "tsdown --watch --no-clean",
     "build": "tsdown",
     "check:lint": "oxlint --max-warnings=3605 .",
     "check:types": "tsc --noEmit",
