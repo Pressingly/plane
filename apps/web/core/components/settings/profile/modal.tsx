@@ -12,6 +12,8 @@ import { IconButton } from "@plane/propel/icon-button";
 import { EModalPosition, EModalWidth, ModalCore } from "@plane/ui";
 // hooks
 import { useCommandPalette } from "@/hooks/store/use-command-palette";
+// helpers
+import { isSsoAuth } from "@/helpers/auth-config.helper";
 // local imports
 import { ProfileSettingsContent } from "./content";
 import { ProfileSettingsSidebarRoot } from "./sidebar";
@@ -20,7 +22,8 @@ export const ProfileSettingsModal = observer(function ProfileSettingsModal() {
   // store hooks
   const { profileSettingsModal, toggleProfileSettingsModal } = useCommandPalette();
   // derived values
-  const activeTab = profileSettingsModal.activeTab ?? "general";
+  const requestedTab = profileSettingsModal.activeTab ?? "general";
+  const activeTab = isSsoAuth() && requestedTab === "security" ? "general" : requestedTab;
 
   const handleClose = useCallback(() => {
     toggleProfileSettingsModal({

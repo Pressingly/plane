@@ -30,6 +30,8 @@ import { useInstance } from "@/hooks/store/use-instance";
 import { useUser, useUserProfile } from "@/hooks/store/user";
 // utils
 import { validatePersonName, validateDisplayName } from "@plane/utils";
+// helpers
+import { isSsoAuth } from "@/helpers/auth-config.helper";
 
 type TUserProfileForm = {
   avatar_url: string;
@@ -56,6 +58,7 @@ export const GeneralProfileSettingsForm = observer(function GeneralProfileSettin
   const [isLoading, setIsLoading] = useState(false);
   const [isImageUploadModalOpen, setIsImageUploadModalOpen] = useState(false);
   const [deactivateAccountModal, setDeactivateAccountModal] = useState(false);
+  const hideDeactivateAccount = isSsoAuth();
   const [isChangeEmailModalOpen, setIsChangeEmailModalOpen] = useState(false);
   // language support
   const { t } = useTranslation();
@@ -190,7 +193,9 @@ export const GeneralProfileSettingsForm = observer(function GeneralProfileSettin
 
   return (
     <>
-      <DeactivateAccountModal isOpen={deactivateAccountModal} onClose={() => setDeactivateAccountModal(false)} />
+      {!hideDeactivateAccount && (
+        <DeactivateAccountModal isOpen={deactivateAccountModal} onClose={() => setDeactivateAccountModal(false)} />
+      )}
       <ChangeEmailModal isOpen={isChangeEmailModalOpen} onClose={() => setIsChangeEmailModalOpen(false)} />
       <Controller
         control={control}
@@ -400,17 +405,19 @@ export const GeneralProfileSettingsForm = observer(function GeneralProfileSettin
           </div>
         </div>
       </form>
-      <div className="mt-10">
-        <SettingsBoxedControlItem
-          title={t("deactivate_account")}
-          description={t("deactivate_account_description")}
-          control={
-            <Button variant="error-outline" onClick={() => setDeactivateAccountModal(true)}>
-              {t("deactivate_account")}
-            </Button>
-          }
-        />
-      </div>
+      {!hideDeactivateAccount && (
+        <div className="mt-10">
+          <SettingsBoxedControlItem
+            title={t("deactivate_account")}
+            description={t("deactivate_account_description")}
+            control={
+              <Button variant="error-outline" onClick={() => setDeactivateAccountModal(true)}>
+                {t("deactivate_account")}
+              </Button>
+            }
+          />
+        </div>
+      )}
     </>
   );
 });
