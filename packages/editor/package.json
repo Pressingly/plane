@@ -1,6 +1,6 @@
 {
   "name": "@plane/editor",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "private": true,
   "description": "Core Editor that powers Plane",
   "keywords": [
@@ -24,7 +24,7 @@
   },
   "scripts": {
     "build": "tsc && tsdown",
-    "dev": "tsdown --watch",
+    "dev": "tsdown --watch --no-clean",
     "check:lint": "oxlint --max-warnings=416 .",
     "check:types": "tsc --noEmit",
     "check:format": "oxfmt --check .",
