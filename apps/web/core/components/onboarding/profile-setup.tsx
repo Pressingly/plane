@@ -21,6 +21,8 @@ import { cn, getFileURL, getPasswordStrength, validatePersonName } from "@plane/
 import { UserImageUploadModal } from "@/components/core/modals/user-image-upload-modal";
 // hooks
 import { useUser, useUserProfile } from "@/hooks/store/user";
+// helpers
+import { isSsoAuth } from "@/helpers/auth-config.helper";
 // services
 import { AuthService } from "@/services/auth.service";
 
@@ -220,8 +222,7 @@ export const ProfileSetup = observer(function ProfileSetup(props: Props) {
 
   // derived values
   const isPasswordAlreadySetup = !user?.is_password_autoset;
-  const isSsoAuth = (import.meta.env.VITE_AUTH_TYPE?.toString() ?? "").trim().toUpperCase() === "SSO";
-  const showOptionalPassword = !isSsoAuth && !isPasswordAlreadySetup;
+  const showOptionalPassword = !isSsoAuth() && !isPasswordAlreadySetup;
   const currentPassword = watch("password") || undefined;
   const currentConfirmPassword = watch("confirm_password") || undefined;
 

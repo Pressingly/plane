@@ -14,6 +14,8 @@ import { GROUPED_PROFILE_SETTINGS, PROFILE_SETTINGS_CATEGORIES } from "@plane/co
 import { useTranslation } from "@plane/i18n";
 import type { ISvgIcons } from "@plane/propel/icons";
 import type { TProfileSettingsTabs } from "@plane/types";
+// helpers
+import { isSsoAuth } from "@/helpers/auth-config.helper";
 // local imports
 import { SettingsSidebarItem } from "../../sidebar/item";
 import { ProfileSettingsSidebarWorkspaceOptions } from "./workspace-options";
@@ -40,11 +42,14 @@ export const ProfileSettingsSidebarItemCategories = observer(function ProfileSet
   const { profileTabId } = useParams();
   // translation
   const { t } = useTranslation();
+  const hideSecurityTab = isSsoAuth();
 
   return (
     <div className="mt-4 flex flex-col gap-y-4">
       {PROFILE_SETTINGS_CATEGORIES.map((category) => {
-        const categoryItems = GROUPED_PROFILE_SETTINGS[category];
+        const categoryItems = GROUPED_PROFILE_SETTINGS[category].filter(
+          (item) => !(hideSecurityTab && item.key === "security")
+        );
 
         if (categoryItems.length === 0) return null;
 
