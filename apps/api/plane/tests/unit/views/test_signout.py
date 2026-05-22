@@ -239,3 +239,20 @@ class TestSignOutAuthEndpointGet:
         response = view.get(_make_get_request(factory, "next=:::garbage"))
 
         assert response.status_code == 400
+
+    @patch("plane.authentication.views.app.signout.base_host", return_value=_BASE_HOST)
+    @patch("plane.authentication.views.app.signout.logout")
+    @patch("plane.authentication.views.app.signout.User")
+    @patch("plane.authentication.views.app.signout.settings")
+    def test_non_http_scheme_is_rejected(
+        self, mock_settings, mock_user_cls, mock_logout, mock_base_host, factory, view
+    ):
+        """javascript: or other non-http(s) schemes must be rejected."""
+        mock_settings.PLATFORM_DOMAIN = "foss.arbisoft.com"
+        mock_user_cls.objects.get.return_value = MagicMock()
+
+        response = view.get(
+            _make_get_request(factory, "next=javascript://foss.arbisoft.com/x")
+        )
+
+        assert response.status_code == 400
