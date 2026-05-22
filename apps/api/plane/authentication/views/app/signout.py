@@ -10,6 +10,7 @@ from django.conf import settings
 from django.http import HttpResponseBadRequest, HttpResponseRedirect
 from django.utils import timezone
 from django.utils.decorators import method_decorator
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 
 from plane.authentication.utils.host import user_ip, base_host
@@ -44,21 +45,19 @@ class SignOutAuthEndpoint(View):
         if not next_url:
             return response
 
-        sanitized = self._sanitize_next(next_url)
-        if sanitized is None:
+        redirect_url = self._validated_redirect_url(next_url)
+        if redirect_url is None:
             return HttpResponseBadRequest(
                 "next= host is not a subdomain of PLATFORM_DOMAIN"
             )
-        return HttpResponseRedirect(sanitized)
+        return HttpResponseRedirect(redirect_url)
 
     @staticmethod
-    def _sanitize_next(url):
-        """Validate and reconstruct *url* from parsed components.
+    def _validated_redirect_url(url):
+        """Validate *url* against the PLATFORM_DOMAIN allowlist.
 
-        Returns the reconstructed URL string if the host is an exact match
-        or a subdomain of PLATFORM_DOMAIN; returns None otherwise.
-        Reconstructing from parsed parts breaks the taint chain so static
-        analysis tools see a derived value rather than raw user input.
+        Returns a safe, server-derived redirect URL string if the host is an
+        exact match or a subdomain of PLATFORM_DOMAIN; returns None otherwise.
         """
         platform_domain = (
             getattr(settings, "PLATFORM_DOMAIN", "") or ""
@@ -66,6 +65,9 @@ class SignOutAuthEndpoint(View):
         if not platform_domain:
             return None
 
+        # Build the set of allowed hosts: the platform domain itself plus
+        # wildcard subdomains (e.g. "foss.arbisoft.com" allows
+        # "docs.foss.arbisoft.com").
         try:
             parsed = urlparse(url)
             host = parsed.hostname
@@ -75,16 +77,21 @@ class SignOutAuthEndpoint(View):
             return None
 
         host = host.lower()
+        # Dot-boundary enforcement: foss.arbisoft.com.evil does NOT match.
         if host != platform_domain and not host.endswith("." + platform_domain):
             return None
 
-        # Only allow http/https schemes to prevent javascript: or data: URIs.
-        scheme = parsed.scheme.lower() if parsed.scheme else "https"
-        if scheme not in ("http", "https"):
+        # Use Django's built-in redirect-URL validator as the authoritative
+        # safety check (recognized by CodeQL as a sanitizer). Pass the
+        # already-validated host as the allowed host for exact matching.
+        if not url_has_allowed_host_and_scheme(
+            url, allowed_hosts={host}, require_https=False
+        ):
             return None
 
-        # Reconstruct URL from parsed components to avoid passing raw user
-        # input directly to the redirect (satisfies open-redirect scanners).
+        # Reconstruct from parsed components so the redirect target is a
+        # server-derived literal rather than the raw request parameter.
+        scheme = parsed.scheme or "https"
         netloc = parsed.netloc
         path = parsed.path or "/"
         query = ("?" + parsed.query) if parsed.query else ""
