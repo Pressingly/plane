@@ -5,6 +5,7 @@
  */
 
 import { observer } from "mobx-react";
+import { Navigate } from "react-router";
 // plane imports
 import { PROFILE_SETTINGS_TABS } from "@plane/constants";
 import { useTranslation } from "@plane/i18n";
@@ -17,6 +18,8 @@ import { ProfileSettingsSidebarRoot } from "@/components/settings/profile/sideba
 // hooks
 import { useUser } from "@/hooks/store/user";
 import { useAppRouter } from "@/hooks/use-app-router";
+// helpers
+import { isSsoAuth } from "@/helpers/auth-config.helper";
 // local imports
 import type { Route } from "../+types/layout";
 
@@ -30,6 +33,10 @@ function ProfileSettingsPage(props: Route.ComponentProps) {
   const { t } = useTranslation();
   // derived values
   const isAValidTab = PROFILE_SETTINGS_TABS.includes(profileTabId as TProfileSettingsTabs);
+
+  if (isSsoAuth() && profileTabId === "security") {
+    return <Navigate to="/settings/profile/general" replace />;
+  }
 
   if (!currentUser || !isAValidTab)
     return (
