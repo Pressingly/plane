@@ -51,3 +51,7 @@ class TestUUIDUtils:
 
         # Should get the same result whether passing UUID or string
         assert convert_uuid_to_integer(test_uuid) == convert_uuid_to_integer(test_uuid_str)
+
+    def test_is_valid_uuid_with_none(self):
+        """Test is_valid_uuid returns False for None input"""
+        assert is_valid_uuid(None) is False
