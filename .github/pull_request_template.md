@@ -1,20 +1,27 @@
-### Description
-<!-- Provide a detailed description of the changes in this PR -->
+## Related Ticket
+<!-- Link the Plane ticket: https://foss-pm.local.moneta.dev/... -->
 
-### Type of Change
-<!-- Put an 'x' in the boxes that apply -->
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] Feature (non-breaking change which adds functionality)
-- [ ] Improvement (change that would cause existing functionality to not work as expected)
-- [ ] Code refactoring
-- [ ] Performance improvements
-- [ ] Documentation update
+## Description
+<!-- What changed and why? Link related issues: FIX #123 -->
 
-### Screenshots and Media (if applicable)
-<!-- Add screenshots to help explain your changes, ideally showcasing before and after -->
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Improvement / Enhancement
+- [ ] Refactoring
+- [ ] Performance improvement
+- [ ] Documentation
+- [ ] Infrastructure / CI
 
-### Test Scenarios 
-<!-- Please describe the tests that you ran to verify your changes -->
+## Testing
+<!-- How did you verify the change? -->
+- [ ] Tested locally
+- [ ] New / updated tests included
 
-### References
-<!-- Link related issues if there are any -->
+## Screenshots
+<!-- If applicable, add before/after screenshots -->
+
+## Checklist
+- [ ] No lint or build errors
+- [ ] All existing tests pass
+- [ ] Documentation updated (if needed)
