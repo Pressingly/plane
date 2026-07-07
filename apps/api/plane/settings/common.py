@@ -106,6 +106,7 @@ DEFAULT_EMAIL_DOMAIN = os.environ.get("DEFAULT_EMAIL_DOMAIN", "askii.ai")
 # SMB portal hostname segment (landing / logout redirects) vs default Plane workspace slug
 SMB_NAME = os.environ.get("SMB_NAME")
 SMB_DEFAULT_WORKSPACE_NAME = os.environ.get("SMB_DEFAULT_WORKSPACE_NAME") or SMB_NAME
+SMB_CORPORATE_ID = os.environ.get("SMB_CORPORATE_ID")
 
 # Middlewares
 MIDDLEWARE = [
