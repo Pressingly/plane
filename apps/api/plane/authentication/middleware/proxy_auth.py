@@ -17,7 +17,14 @@ from plane.authentication.middleware.proxy_auth_utils import (
     _normalise_email,
 )
 from plane.authentication.utils.login import user_login
-from plane.db.models import Profile, User, Workspace, WorkspaceMember
+from plane.db.models import (
+    Profile,
+    Project,
+    ProjectMember,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from plane.db.models.workspace import ROLE_CHOICES
 
 # Build a label → value lookup so role names can be used symbolically.
@@ -205,6 +212,29 @@ class ProxyAuthMiddleware:
             member=user,
             defaults={"role": _ROLE["Member"], "is_active": True},
         )
+
+        # Also join every project in the workspace so members never hit the
+        # "Join Project" prompt. Only missing memberships are inserted; an
+        # existing inactive row (user left the project) is left untouched.
+        project_ids = set(
+            Project.objects.filter(workspace=workspace).values_list("id", flat=True)
+        )
+        if project_ids:
+            existing_ids = set(
+                ProjectMember.objects.filter(
+                    member=user, project_id__in=project_ids
+                ).values_list("project_id", flat=True)
+            )
+            for project_id in project_ids - existing_ids:
+                ProjectMember.objects.get_or_create(
+                    project_id=project_id,
+                    member=user,
+                    defaults={
+                        "workspace": workspace,
+                        "role": _ROLE["Member"],
+                        "is_active": True,
+                    },
+                )
 
         # Only update profile if onboarding is not yet complete — avoids a
         # write on every request for already-onboarded users.
