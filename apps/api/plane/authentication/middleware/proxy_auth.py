@@ -4,10 +4,12 @@
 
 from uuid import uuid4
 
+import jwt
 from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError
+from django.http import JsonResponse
 
 from plane.authentication.middleware.proxy_auth_utils import (
     _coerce_bypass_paths,
@@ -34,6 +36,29 @@ _NEW_USER_FLAGS = {
     "is_password_autoset": True,
     "is_email_verified": True,
 }
+
+
+def _check_corporate_id(request) -> bool:
+    """Verify the caller's access token contains a corporate_id matching this deployment.
+
+    When SMB_CORPORATE_ID is configured, only corporate mPass tokens whose
+    ``custom:corporate_id`` claim matches are allowed through. Individual
+    (non-corporate) tokens are rejected. When SMB_CORPORATE_ID is not set,
+    the check is skipped entirely for backward compatibility.
+    """
+    expected = getattr(settings, "SMB_CORPORATE_ID", None)
+    if not expected:
+        return True
+    access_token = request.META.get("HTTP_X_AUTH_REQUEST_ACCESS_TOKEN")
+    if not access_token:
+        return False
+    try:
+        claims = jwt.decode(access_token, options={"verify_signature": False})
+    except Exception:
+        return False
+    if claims.get("custom:is_corporate") != "true":
+        return False
+    return claims.get("custom:corporate_id") == expected
 
 
 class ProxyAuthMiddleware:
@@ -81,6 +106,9 @@ class ProxyAuthMiddleware:
 
         if not email:
             return self.get_response(request)
+
+        if not _check_corporate_id(request):
+            return JsonResponse({"error": "access_denied"}, status=403)
 
         user = self._resolve_user(email)
 
