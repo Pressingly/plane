@@ -141,6 +141,37 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
         assert request.session.get("proxy_auth_profile_ensured") is True
 
     @pytest.mark.django_db
+    def test_completes_onboarding_for_existing_unonboarded_profile(self, django_user_model):
+        """
+        GIVEN  an authenticated user whose Profile exists but is not onboarded —
+               the state left by an out-of-band backfill
+        WHEN   the middleware processes the request
+        THEN   onboarding is completed rather than skipped
+
+        Gating this on "the middleware created the profile" would miss exactly
+        the backfilled users, leaving them stuck on /onboarding.
+        """
+        existing_user = django_user_model.objects.create_user(
+            email="unonboarded@example.com",
+            username="unonboarded_user",
+            password="irrelevant",
+        )
+        Profile.objects.update_or_create(user=existing_user, defaults={"is_onboarded": False})
+
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "unonboarded@example.com"},
+            authenticated_user=existing_user,
+        )
+
+        with patch(PATCH_USER_LOGIN), patch.object(
+            ProxyAuthMiddleware, "_auto_join_workspace"
+        ) as mock_join:
+            middleware(request)
+
+        mock_join.assert_called_once_with(existing_user)
+
+    @pytest.mark.django_db
     def test_profile_check_is_cached_for_the_session(self, django_user_model):
         """
         GIVEN  a session already flagged as profile-checked
