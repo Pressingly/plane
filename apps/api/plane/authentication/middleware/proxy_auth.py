@@ -155,7 +155,7 @@ class ProxyAuthMiddleware:
     def _resolve_user(self, email):
         username_hint = email.split("@")[0] or uuid4().hex
         try:
-            user, created = User.objects.get_or_create(
+            user, _ = User.objects.get_or_create(
                 email=email,
                 defaults={
                     "username": username_hint,
@@ -169,10 +169,13 @@ class ProxyAuthMiddleware:
                 user = User.objects.get(email=email)
             except User.DoesNotExist:
                 raise
-            created = False
 
-        if created:
-            Profile.objects.get_or_create(user=user)
+        # Run for every user, not just newly created ones. Users provisioned
+        # outside the signup path — e.g. inserted directly by the JIRA import —
+        # have no Profile row, which makes /api/users/me/profile/ return 404 and
+        # bounces the client back to the login page in a loop. get_or_create is
+        # idempotent, so an existing profile is left untouched.
+        Profile.objects.get_or_create(user=user)
 
         # Run for every user (new or existing) — idempotent, no-op if already joined.
         self._auto_join_workspace(user)
