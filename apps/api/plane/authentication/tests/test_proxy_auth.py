@@ -18,14 +18,17 @@ Design contract being tested
 - If path starts with a bypass prefix → pass through immediately (no DB, no login)
   Default bypass prefixes: ["/god-mode", "/api/instances"]
 - If request.user.is_authenticated:
-    * proxy header absent or matches request.user.email → short-circuit
+    * proxy header absent or matches request.user.email → ensure a Profile exists
+      (once per session, gated on a session flag) then short-circuit
     * proxy header asserts a DIFFERENT email → logout() to flush the stale session,
       then fall through and re-authenticate
       (defends against the "stale Django session survives upstream logout"
       class of bug — see TestProxyAuthMiddlewareUserSwitch)
 - If both identity headers are absent (and no existing session) → pass through unauthenticated
-- If identity can be derived from headers → get_or_create User, create Profile on first creation,
-  then call user_login(request, user, is_app=True) to establish session
+- If identity can be derived from headers → get_or_create User, ensure a Profile exists
+  (for every user, not just newly created ones — the JIRA import inserts users
+  directly and leaves them profile-less), then call user_login(request, user, is_app=True)
+  to establish session
 - New users get: set_unusable_password(), is_password_autoset=True, is_email_verified=True
 - username is always uuid4().hex (never the Cognito sub — avoids length/collision issues)
 - Email is normalised (lowercased + stripped) before DB lookup
@@ -104,6 +107,67 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
         get_response.assert_called_once_with(request)
         mock_login.assert_not_called()
         assert User.objects.count() == count_before
+
+    @pytest.mark.django_db
+    def test_creates_missing_profile_for_authenticated_user(self, django_user_model):
+        """
+        GIVEN  an authenticated user with no Profile — e.g. inserted directly by
+               the JIRA import, which bypasses Plane's signup path
+        WHEN   the middleware processes the request
+        THEN   the missing Profile is created
+               AND the session is flagged so later requests skip the check
+
+        Without this the user 404s on /api/users/me/profile/ for the life of
+        the session and the web client loops back to the login page.
+        """
+        existing_user = django_user_model.objects.create_user(
+            email="noprofile@example.com",
+            username="noprofile_user",
+            password="irrelevant",
+        )
+        Profile.objects.filter(user=existing_user).delete()
+        assert not Profile.objects.filter(user=existing_user).exists()
+
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "noprofile@example.com"},
+            authenticated_user=existing_user,
+        )
+
+        with patch(PATCH_USER_LOGIN):
+            middleware(request)
+
+        assert Profile.objects.filter(user=existing_user).exists()
+        assert request.session.get("proxy_auth_profile_ensured") is True
+
+    @pytest.mark.django_db
+    def test_profile_check_is_cached_for_the_session(self, django_user_model):
+        """
+        GIVEN  a session already flagged as profile-checked
+        WHEN   the middleware processes a further request on that session
+        THEN   it does not re-check the profile
+
+        Asserted by deleting the Profile after the first pass: if the flag were
+        ignored the second pass would recreate it, which would mean a SELECT on
+        every request rather than one per session.
+        """
+        existing_user = django_user_model.objects.create_user(
+            email="cached@example.com",
+            username="cached_user",
+            password="irrelevant",
+        )
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "cached@example.com"},
+            authenticated_user=existing_user,
+        )
+
+        with patch(PATCH_USER_LOGIN):
+            middleware(request)
+            Profile.objects.filter(user=existing_user).delete()
+            middleware(request)
+
+        assert not Profile.objects.filter(user=existing_user).exists()
 
 
 class TestProxyAuthMiddlewareUserSwitch:

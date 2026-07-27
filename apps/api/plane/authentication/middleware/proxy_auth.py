@@ -102,9 +102,13 @@ class ProxyAuthMiddleware:
                 # session while still missing a Profile, and would otherwise
                 # keep 404ing on /api/users/me/profile/ until the session
                 # expires. Gate on a session flag so this costs one query per
-                # session rather than one per request.
+                # session rather than one per request. The freshly created
+                # profile still needs onboarding completed, which is why
+                # _auto_join_workspace runs here too.
                 if not request.session.get(_PROFILE_ENSURED_KEY):
-                    Profile.objects.get_or_create(user=request.user)
+                    _, profile_created = Profile.objects.get_or_create(user=request.user)
+                    if profile_created:
+                        self._auto_join_workspace(request.user)
                     request.session[_PROFILE_ENSURED_KEY] = True
                 return self.get_response(request)
 
@@ -129,6 +133,9 @@ class ProxyAuthMiddleware:
             return self.get_response(request)
 
         user_login(request=request, user=user, is_app=True)
+        # _resolve_user just guaranteed the profile, so the next request on this
+        # session can skip the check instead of re-running it once per login.
+        request.session[_PROFILE_ENSURED_KEY] = True
         return self.get_response(request)
 
     @staticmethod
