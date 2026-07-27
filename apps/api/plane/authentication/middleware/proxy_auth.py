@@ -37,6 +37,9 @@ _NEW_USER_FLAGS = {
     "is_email_verified": True,
 }
 
+# Session flag marking that this session's user is known to have a Profile.
+_PROFILE_ENSURED_KEY = "proxy_auth_profile_ensured"
+
 
 def _check_corporate_id(request) -> bool:
     """Verify the caller's access token contains a corporate_id matching this deployment.
@@ -95,6 +98,14 @@ class ProxyAuthMiddleware:
             # not pass through ForwardAuth — header absence is not a logout signal).
             current = _normalise_email(request.user.email or "")
             if not email or current == email:
+                # A user provisioned outside the signup path can already hold a
+                # session while still missing a Profile, and would otherwise
+                # keep 404ing on /api/users/me/profile/ until the session
+                # expires. Gate on a session flag so this costs one query per
+                # session rather than one per request.
+                if not request.session.get(_PROFILE_ENSURED_KEY):
+                    Profile.objects.get_or_create(user=request.user)
+                    request.session[_PROFILE_ENSURED_KEY] = True
                 return self.get_response(request)
 
             # Mismatch detected: proxy asserts a different identity than the
@@ -165,10 +176,7 @@ class ProxyAuthMiddleware:
             )
         except IntegrityError:
             # Concurrent email insert race — fall back to get().
-            try:
-                user = User.objects.get(email=email)
-            except User.DoesNotExist:
-                raise
+            user = User.objects.get(email=email)
 
         # Run for every user, not just newly created ones. Users provisioned
         # outside the signup path — e.g. inserted directly by the JIRA import —
