@@ -37,6 +37,9 @@ _NEW_USER_FLAGS = {
     "is_email_verified": True,
 }
 
+# Session flag marking that this session's user is known to have a Profile.
+_PROFILE_ENSURED_KEY = "proxy_auth_profile_ensured"
+
 
 def _check_corporate_id(request) -> bool:
     """Verify the caller's access token contains a corporate_id matching this deployment.
@@ -95,6 +98,18 @@ class ProxyAuthMiddleware:
             # not pass through ForwardAuth — header absence is not a logout signal).
             current = _normalise_email(request.user.email or "")
             if not email or current == email:
+                # A user provisioned outside the signup path can already hold a
+                # session while still missing a Profile, and would otherwise
+                # keep 404ing on /api/users/me/profile/ until the session
+                # expires. Gate on a session flag so this runs once per session
+                # rather than once per request. A profile created here — or
+                # backfilled out of band — still has onboarding incomplete,
+                # which is what _auto_join_workspace finishes.
+                if not request.session.get(_PROFILE_ENSURED_KEY):
+                    profile, _ = Profile.objects.get_or_create(user=request.user)
+                    if not profile.is_onboarded:
+                        self._auto_join_workspace(request.user)
+                    request.session[_PROFILE_ENSURED_KEY] = True
                 return self.get_response(request)
 
             # Mismatch detected: proxy asserts a different identity than the
@@ -118,6 +133,9 @@ class ProxyAuthMiddleware:
             return self.get_response(request)
 
         user_login(request=request, user=user, is_app=True)
+        # _resolve_user just guaranteed the profile, so the next request on this
+        # session can skip the check instead of re-running it once per login.
+        request.session[_PROFILE_ENSURED_KEY] = True
         return self.get_response(request)
 
     @staticmethod
@@ -155,7 +173,7 @@ class ProxyAuthMiddleware:
     def _resolve_user(self, email):
         username_hint = email.split("@")[0] or uuid4().hex
         try:
-            user, created = User.objects.get_or_create(
+            user, _ = User.objects.get_or_create(
                 email=email,
                 defaults={
                     "username": username_hint,
@@ -165,14 +183,14 @@ class ProxyAuthMiddleware:
             )
         except IntegrityError:
             # Concurrent email insert race — fall back to get().
-            try:
-                user = User.objects.get(email=email)
-            except User.DoesNotExist:
-                raise
-            created = False
+            user = User.objects.get(email=email)
 
-        if created:
-            Profile.objects.get_or_create(user=user)
+        # Run for every user, not just newly created ones. Users provisioned
+        # outside the signup path — e.g. inserted directly by the JIRA import —
+        # have no Profile row, which makes /api/users/me/profile/ return 404 and
+        # bounces the client back to the login page in a loop. get_or_create is
+        # idempotent, so an existing profile is left untouched.
+        Profile.objects.get_or_create(user=user)
 
         # Run for every user (new or existing) — idempotent, no-op if already joined.
         self._auto_join_workspace(user)
