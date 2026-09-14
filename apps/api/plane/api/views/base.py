@@ -49,7 +49,15 @@ class TimezoneMixin:
 
 
 class BaseAPIView(TimezoneMixin, GenericAPIView, ReadReplicaControlMixin, BasePaginator):
-    authentication_classes = [BaseSessionAuthentication, APIKeyAuthentication]
+    # Order matters: DRF stops at the first authenticator returning a
+    # non-None tuple. APIKeyAuthentication must run first so an X-Api-Key is
+    # always validated — ProxyAuthMiddleware establishes a session on every
+    # non-bypass path, so session auth would otherwise short-circuit and an
+    # expired or revoked token would succeed as the session user. An invalid
+    # key raises AuthenticationFailed, which DRF re-raises rather than
+    # falling through, so revocation fails closed. Requests with no key
+    # (Bearer-only MCP path) fall through to the session as intended.
+    authentication_classes = [APIKeyAuthentication, BaseSessionAuthentication]
 
     permission_classes = [IsAuthenticated]
 
@@ -168,7 +176,15 @@ class BaseAPIView(TimezoneMixin, GenericAPIView, ReadReplicaControlMixin, BasePa
 class BaseViewSet(TimezoneMixin, ReadReplicaControlMixin, ModelViewSet, BasePaginator):
     model = None
 
-    authentication_classes = [BaseSessionAuthentication, APIKeyAuthentication]
+    # Order matters: DRF stops at the first authenticator returning a
+    # non-None tuple. APIKeyAuthentication must run first so an X-Api-Key is
+    # always validated — ProxyAuthMiddleware establishes a session on every
+    # non-bypass path, so session auth would otherwise short-circuit and an
+    # expired or revoked token would succeed as the session user. An invalid
+    # key raises AuthenticationFailed, which DRF re-raises rather than
+    # falling through, so revocation fails closed. Requests with no key
+    # (Bearer-only MCP path) fall through to the session as intended.
+    authentication_classes = [APIKeyAuthentication, BaseSessionAuthentication]
     permission_classes = [
         IsAuthenticated,
     ]
