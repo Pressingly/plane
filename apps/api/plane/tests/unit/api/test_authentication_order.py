@@ -16,9 +16,14 @@ Two things have to hold for the ordering to be worth anything, and both are
 pinned here:
 
 1. ``APIKeyAuthentication`` runs first and fails closed (``TestAuthenticatorResolution``).
-2. ``validate_api_token`` actually rejects revoked and expired tokens — the
-   ordering is pointless if the lookup stops filtering on ``is_active`` or
-   ``expired_at`` (``TestTokenValidationPredicate``).
+2. ``validate_api_token`` actually rejects revoked and expired tokens
+   (``TestTokenValidationPredicate``). Note revocation is a *soft delete*:
+   ``ApiTokenEndpoint.delete`` calls ``SoftDeleteModel.delete``, which sets
+   ``deleted_at`` and leaves ``is_active`` True and ``expired_at`` NULL. So the
+   primary guard is the lookup going through ``SoftDeletionManager`` (which
+   filters ``deleted_at__isnull=True``); ``is_active`` and ``expired_at`` are
+   secondary. A swap to ``APIToken.all_objects`` would defeat revocation while
+   leaving every named filter intact.
 
 The predicate is asserted against the real ORM call rather than a live row:
 creating a test database requires CREATEDB, which the ``plane`` role does not
@@ -35,13 +40,13 @@ from unittest.mock import Mock, patch
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Q
 from django.test import RequestFactory
-from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.request import Request
 
 from plane.api.middleware.api_authentication import APIKeyAuthentication
 from plane.api.views.base import BaseAPIView, BaseViewSet
 from plane.authentication.session import BaseSessionAuthentication
+from plane.db.mixins import SoftDeletionManager
 from plane.db.models import APIToken, User
 
 
@@ -53,6 +58,15 @@ BASE_CLASSES = [BaseAPIView, BaseViewSet]
 @pytest.fixture
 def request_factory():
     return RequestFactory()
+
+
+def _flatten_q(node, out):
+    """Collect every ``lookup -> value`` leaf in a Q tree, at any nesting depth."""
+    for child in node.children:
+        if isinstance(child, Q):
+            _flatten_q(child, out)
+        else:
+            out[child[0]] = child[1]
 
 
 def _user(email):
@@ -139,43 +153,67 @@ class TestAuthenticatorResolution:
 class TestTokenValidationPredicate:
     """``validate_api_token`` must keep filtering out revoked/expired tokens.
 
-    Without these, the ordering fix above is load-bearing on a lookup nothing
-    covers: drop ``is_active=True`` and revoked tokens authenticate again.
+    The ordering fix above is load-bearing on this lookup. Revocation is
+    enforced by the soft-deletion manager; expiry and deactivation by the
+    explicit filters. All three are pinned here because nothing else covers them.
     """
+
+    def test_lookup_goes_through_the_soft_deletion_manager(self):
+        """Revocation is a soft delete: deleted_at is set, is_active stays True.
+
+        Switching the call site to ``APIToken.all_objects`` keeps every named
+        filter intact and still returns revoked tokens, so the manager the
+        lookup runs through is the real guard.
+        """
+        assert isinstance(APIToken.objects, SoftDeletionManager), (
+            "APIToken.objects is no longer a SoftDeletionManager — revoked "
+            "(soft-deleted) tokens would authenticate"
+        )
+        default_manager, unfiltered_manager = self._captured_lookup()
+        assert default_manager.get.called, "lookup did not use APIToken.objects"
+        assert not unfiltered_manager.get.called, (
+            "validate_api_token queries APIToken.all_objects, bypassing the "
+            "deleted_at filter — revoked tokens would authenticate"
+        )
 
     @staticmethod
     def _captured_lookup():
-        """Call validate_api_token with a stubbed manager; return the ORM call args."""
-        with patch.object(APIToken, "objects") as manager:
-            manager.get.return_value = Mock(user=Mock(), token="tok")
+        """Call validate_api_token with both managers stubbed.
+
+        Returns ``(default_manager, unfiltered_manager)`` so callers can assert
+        both the filter shape and which manager the call site actually used.
+        """
+        with (
+            patch.object(APIToken, "objects") as default_manager,
+            patch.object(APIToken, "all_objects") as unfiltered_manager,
+        ):
+            default_manager.get.return_value = Mock(user=Mock(), token="tok")
+            unfiltered_manager.get.return_value = Mock(user=Mock(), token="tok")
             APIKeyAuthentication().validate_api_token("tok")
-        return manager.get.call_args
+        return default_manager, unfiltered_manager
 
     def test_filters_on_is_active(self):
-        call = self._captured_lookup()
+        call = self._captured_lookup()[0].get.call_args
         assert call.kwargs["is_active"] is True, (
             "validate_api_token no longer filters on is_active — revoked tokens "
             "would authenticate"
         )
 
     def test_filters_on_the_supplied_token(self):
-        assert self._captured_lookup().kwargs["token"] == "tok"
+        assert self._captured_lookup()[0].get.call_args.kwargs["token"] == "tok"
 
     def test_rejects_tokens_whose_expiry_has_passed(self):
         """Expiry must be 'expires in the future OR never expires', not the inverse."""
-        call = self._captured_lookup()
-        q_children = dict(
-            child
-            for arg in call.args
-            if isinstance(arg, Q)
-            for sub in arg.children
-            for child in (sub.children if isinstance(sub, Q) else [sub])
+        call = self._captured_lookup()[0].get.call_args
+        lookups = {}
+        for arg in call.args:
+            if isinstance(arg, Q):
+                _flatten_q(arg, lookups)
+        assert "expired_at__gt" in lookups, (
+            "expiry filter is missing or inverted — expired tokens would "
+            f"authenticate (found: {sorted(lookups)})"
         )
-        assert "expired_at__gt" in q_children, (
-            "expiry filter is missing or inverted — expired tokens would authenticate"
-        )
-        assert q_children.get("expired_at__isnull") is True
-        assert q_children["expired_at__gt"] <= timezone.now()
+        assert lookups.get("expired_at__isnull") is True
 
     def test_raises_authentication_failed_when_no_row_matches(self):
         """A token failing the predicate must raise, not return None."""
