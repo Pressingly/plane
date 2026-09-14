@@ -45,7 +45,15 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store CI=true pnpm install --p
 
 ENV TURBO_TELEMETRY_DISABLED=1
 
-RUN pnpm turbo run build --filter=live
+# --concurrency=1 is required for linux/amd64 cross-builds on arm64 hosts.
+# live's four leaf packages (logger, decorators, types, hooks) have no
+# ordering between them, so turbo builds them at once and each creates its
+# own packages/<pkg>/.turbo. Under QEMU those simultaneous mkdir calls return
+# EINTR, Rust's std::fs::create_dir does not retry, and turbo then fails
+# replaying cache logs into the missing directory. Serializing removes the
+# race. web/space/admin are unaffected: their dependency graphs are deeper,
+# so turbo staggers the same work instead of firing it in parallel.
+RUN pnpm turbo run build --filter=live --concurrency=1
 
 # *****************************************************************************
 # STAGE 3: Run the project
