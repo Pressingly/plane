@@ -49,7 +49,21 @@ class TimezoneMixin:
 
 
 class BaseAPIView(TimezoneMixin, GenericAPIView, ReadReplicaControlMixin, BasePaginator):
-    authentication_classes = [BaseSessionAuthentication, APIKeyAuthentication]
+    # Order matters: DRF stops at the first authenticator returning a
+    # non-None tuple. APIKeyAuthentication must run first so an X-Api-Key is
+    # always validated — ProxyAuthMiddleware establishes a session on every
+    # non-bypass path, so session auth would otherwise short-circuit and an
+    # expired or revoked token would succeed as the session user. Revocation is
+    # a soft delete — deleted_at is set while is_active stays True — so it is
+    # SoftDeletionManager on APIToken.objects that rejects the token, not the
+    # is_active filter. An invalid
+    # key raises AuthenticationFailed, which DRF re-raises rather than
+    # falling through, so revocation fails closed. Note the response is 403,
+    # not 401: DRF coerces AuthenticationFailed when the first authenticator
+    # has no authenticate_header(), and APIKeyAuthentication defines none.
+    # Clients retrying on a rejected key must key off 403. Requests with no
+    # key (Bearer-only MCP path) fall through to the session as intended.
+    authentication_classes = [APIKeyAuthentication, BaseSessionAuthentication]
 
     permission_classes = [IsAuthenticated]
 
@@ -168,7 +182,21 @@ class BaseAPIView(TimezoneMixin, GenericAPIView, ReadReplicaControlMixin, BasePa
 class BaseViewSet(TimezoneMixin, ReadReplicaControlMixin, ModelViewSet, BasePaginator):
     model = None
 
-    authentication_classes = [BaseSessionAuthentication, APIKeyAuthentication]
+    # Order matters: DRF stops at the first authenticator returning a
+    # non-None tuple. APIKeyAuthentication must run first so an X-Api-Key is
+    # always validated — ProxyAuthMiddleware establishes a session on every
+    # non-bypass path, so session auth would otherwise short-circuit and an
+    # expired or revoked token would succeed as the session user. Revocation is
+    # a soft delete — deleted_at is set while is_active stays True — so it is
+    # SoftDeletionManager on APIToken.objects that rejects the token, not the
+    # is_active filter. An invalid
+    # key raises AuthenticationFailed, which DRF re-raises rather than
+    # falling through, so revocation fails closed. Note the response is 403,
+    # not 401: DRF coerces AuthenticationFailed when the first authenticator
+    # has no authenticate_header(), and APIKeyAuthentication defines none.
+    # Clients retrying on a rejected key must key off 403. Requests with no
+    # key (Bearer-only MCP path) fall through to the session as intended.
+    authentication_classes = [APIKeyAuthentication, BaseSessionAuthentication]
     permission_classes = [
         IsAuthenticated,
     ]
