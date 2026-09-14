@@ -55,8 +55,11 @@ class BaseAPIView(TimezoneMixin, GenericAPIView, ReadReplicaControlMixin, BasePa
     # non-bypass path, so session auth would otherwise short-circuit and an
     # expired or revoked token would succeed as the session user. An invalid
     # key raises AuthenticationFailed, which DRF re-raises rather than
-    # falling through, so revocation fails closed. Requests with no key
-    # (Bearer-only MCP path) fall through to the session as intended.
+    # falling through, so revocation fails closed. Note the response is 403,
+    # not 401: DRF coerces AuthenticationFailed when the first authenticator
+    # has no authenticate_header(), and APIKeyAuthentication defines none.
+    # Clients retrying on a rejected key must key off 403. Requests with no
+    # key (Bearer-only MCP path) fall through to the session as intended.
     authentication_classes = [APIKeyAuthentication, BaseSessionAuthentication]
 
     permission_classes = [IsAuthenticated]
@@ -182,8 +185,11 @@ class BaseViewSet(TimezoneMixin, ReadReplicaControlMixin, ModelViewSet, BasePagi
     # non-bypass path, so session auth would otherwise short-circuit and an
     # expired or revoked token would succeed as the session user. An invalid
     # key raises AuthenticationFailed, which DRF re-raises rather than
-    # falling through, so revocation fails closed. Requests with no key
-    # (Bearer-only MCP path) fall through to the session as intended.
+    # falling through, so revocation fails closed. Note the response is 403,
+    # not 401: DRF coerces AuthenticationFailed when the first authenticator
+    # has no authenticate_header(), and APIKeyAuthentication defines none.
+    # Clients retrying on a rejected key must key off 403. Requests with no
+    # key (Bearer-only MCP path) fall through to the session as intended.
     authentication_classes = [APIKeyAuthentication, BaseSessionAuthentication]
     permission_classes = [
         IsAuthenticated,
