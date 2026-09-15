@@ -113,3 +113,6 @@ scripts/
 
 # SSO design specs (implemented, code is source of truth)
 docs/cognito_*.md
+
+# graphify knowledge graph (generated locally; rebuilt on commit via post-commit hook)
+graphify-out/
