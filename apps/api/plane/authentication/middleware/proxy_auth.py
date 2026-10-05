@@ -103,11 +103,11 @@ class ProxyAuthMiddleware:
                 # keep 404ing on /api/users/me/profile/ until the session
                 # expires. Gate on a session flag so this runs once per session
                 # rather than once per request. A profile created here — or
-                # backfilled out of band — still has onboarding incomplete,
-                # which is what _auto_join_workspace finishes.
+                # backfilled out of band — still has onboarding or the product
+                # tour incomplete, which is what _auto_join_workspace finishes.
                 if not request.session.get(_PROFILE_ENSURED_KEY):
                     profile, _ = Profile.objects.get_or_create(user=request.user)
-                    if not profile.is_onboarded:
+                    if not (profile.is_onboarded and profile.is_tour_completed):
                         self._auto_join_workspace(request.user)
                     request.session[_PROFILE_ENSURED_KEY] = True
                 return self.get_response(request)
@@ -200,8 +200,9 @@ class ProxyAuthMiddleware:
     @staticmethod
     def _auto_join_workspace(user):
         """
-        On every login, ensure the user is a member of the first existing workspace
-        and that their onboarding is marked complete so Plane skips the wizard.
+        On every login, ensure the user is a member of the SMB workspace and that
+        their onboarding and product tour are marked complete so Plane skips the
+        wizard and the welcome modal.
         If no workspace exists yet, do nothing — the normal create-workspace flow
         will be shown.
         Idempotent: get_or_create and conditional profile update make repeated
@@ -235,4 +236,7 @@ class ProxyAuthMiddleware:
                 "workspace_invite": True,
                 "workspace_join": True,
             },
+        )
+        Profile.objects.filter(user=user, is_tour_completed=False).update(
+            is_tour_completed=True
         )

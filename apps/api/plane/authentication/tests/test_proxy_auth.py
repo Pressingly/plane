@@ -37,13 +37,15 @@ Design contract being tested
   re-raises if the user still doesn't exist
 """
 
+import uuid
+
 import pytest
 from unittest.mock import MagicMock, Mock, patch
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 
 from plane.authentication.middleware.proxy_auth import ProxyAuthMiddleware
-from plane.db.models import User, Profile
+from plane.db.models import User, Profile, Workspace, WorkspaceMember
 
 PATCH_USER_LOGIN = "plane.authentication.middleware.proxy_auth.user_login"
 PATCH_LOGOUT = "plane.authentication.middleware.proxy_auth.logout"
@@ -172,6 +174,65 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
         mock_join.assert_called_once_with(existing_user)
 
     @pytest.mark.django_db
+    def test_completes_tour_for_onboarded_profile_with_pending_tour(self, django_user_model):
+        """
+        GIVEN  an authenticated, onboarded user whose product tour is still
+               pending — e.g. pre-created by provisioning
+        WHEN   the middleware processes the request
+        THEN   _auto_join_workspace runs so the welcome modal is skipped
+        """
+        existing_user = django_user_model.objects.create_user(
+            email="pendingtour@example.com",
+            username="pendingtour_user",
+            password="irrelevant",
+        )
+        Profile.objects.update_or_create(
+            user=existing_user, defaults={"is_onboarded": True, "is_tour_completed": False}
+        )
+
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "pendingtour@example.com"},
+            authenticated_user=existing_user,
+        )
+
+        with patch(PATCH_USER_LOGIN), patch.object(
+            ProxyAuthMiddleware, "_auto_join_workspace"
+        ) as mock_join:
+            middleware(request)
+
+        mock_join.assert_called_once_with(existing_user)
+
+    @pytest.mark.django_db
+    def test_skips_auto_join_for_fully_onboarded_profile(self, django_user_model):
+        """
+        GIVEN  an authenticated user who is onboarded and has completed the tour
+        WHEN   the middleware processes the request
+        THEN   _auto_join_workspace is not called
+        """
+        existing_user = django_user_model.objects.create_user(
+            email="done@example.com",
+            username="done_user",
+            password="irrelevant",
+        )
+        Profile.objects.update_or_create(
+            user=existing_user, defaults={"is_onboarded": True, "is_tour_completed": True}
+        )
+
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "done@example.com"},
+            authenticated_user=existing_user,
+        )
+
+        with patch(PATCH_USER_LOGIN), patch.object(
+            ProxyAuthMiddleware, "_auto_join_workspace"
+        ) as mock_join:
+            middleware(request)
+
+        mock_join.assert_not_called()
+
+    @pytest.mark.django_db
     def test_profile_check_is_cached_for_the_session(self, django_user_model):
         """
         GIVEN  a session already flagged as profile-checked
@@ -199,6 +260,89 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
             middleware(request)
 
         assert not Profile.objects.filter(user=existing_user).exists()
+
+
+class TestProxyAuthMiddlewareAutoJoinWorkspace:
+    """Auto-join must land SSO users on the SMB workspace with no first-run screens."""
+
+    SMB_SLUG = "smb-workspace"
+
+    @pytest.fixture
+    def workspace(self, django_user_model, settings):
+        settings.SMB_DEFAULT_WORKSPACE_NAME = self.SMB_SLUG
+        owner = django_user_model.objects.create_user(
+            email="owner@example.com",
+            username="owner_user",
+            password="irrelevant",
+        )
+        return Workspace.objects.create(name="SMB", slug=self.SMB_SLUG, owner=owner)
+
+    @pytest.mark.django_db
+    def test_new_profile_is_onboarded_and_tour_completed(self, django_user_model, workspace):
+        user = django_user_model.objects.create_user(
+            email="joiner@example.com",
+            username="joiner_user",
+            password="irrelevant",
+        )
+        Profile.objects.update_or_create(
+            user=user, defaults={"is_onboarded": False, "is_tour_completed": False}
+        )
+
+        ProxyAuthMiddleware._auto_join_workspace(user)
+
+        profile = Profile.objects.get(user=user)
+        assert profile.is_onboarded is True
+        assert profile.is_tour_completed is True
+        assert profile.last_workspace_id == workspace.id
+        assert WorkspaceMember.objects.get(workspace=workspace, member=user).role == 15
+
+    @pytest.mark.django_db
+    def test_onboarded_profile_only_gets_tour_completed(self, django_user_model, workspace):
+        """
+        GIVEN  an onboarded profile whose tour is pending and whose last
+               workspace points elsewhere
+        WHEN   _auto_join_workspace runs
+        THEN   the tour is marked complete
+               AND the onboarding fields are left untouched
+        """
+        user = django_user_model.objects.create_user(
+            email="provisioned@example.com",
+            username="provisioned_user",
+            password="irrelevant",
+        )
+        other_workspace_id = uuid.uuid4()
+        Profile.objects.update_or_create(
+            user=user,
+            defaults={
+                "is_onboarded": True,
+                "is_tour_completed": False,
+                "last_workspace_id": other_workspace_id,
+            },
+        )
+
+        ProxyAuthMiddleware._auto_join_workspace(user)
+
+        profile = Profile.objects.get(user=user)
+        assert profile.is_tour_completed is True
+        assert profile.last_workspace_id == other_workspace_id
+
+    @pytest.mark.django_db
+    def test_no_workspace_leaves_profile_untouched(self, django_user_model, settings):
+        settings.SMB_DEFAULT_WORKSPACE_NAME = "missing-workspace"
+        user = django_user_model.objects.create_user(
+            email="orphan@example.com",
+            username="orphan_user",
+            password="irrelevant",
+        )
+        Profile.objects.update_or_create(
+            user=user, defaults={"is_onboarded": False, "is_tour_completed": False}
+        )
+
+        ProxyAuthMiddleware._auto_join_workspace(user)
+
+        profile = Profile.objects.get(user=user)
+        assert profile.is_onboarded is False
+        assert profile.is_tour_completed is False
 
 
 class TestProxyAuthMiddlewareUserSwitch:
