@@ -18,8 +18,9 @@ Design contract being tested
 - If path starts with a bypass prefix → pass through immediately (no DB, no login)
   Default bypass prefixes: ["/god-mode", "/api/instances"]
 - If request.user.is_authenticated:
-    * proxy header absent or matches request.user.email → ensure a Profile exists
-      (once per session, gated on a session flag) then short-circuit
+    * proxy header absent or matches request.user.email → ensure a Profile and
+      the SMB workspace/project memberships exist (once per session, gated on a
+      session flag) then short-circuit
     * proxy header asserts a DIFFERENT email → logout() to flush the stale session,
       then fall through and re-authenticate
       (defends against the "stale Django session survives upstream logout"
@@ -45,7 +46,15 @@ from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 
 from plane.authentication.middleware.proxy_auth import ProxyAuthMiddleware
-from plane.db.models import User, Profile, Workspace, WorkspaceMember
+from plane.db.models import (
+    Profile,
+    Project,
+    ProjectMember,
+    ProjectUserProperty,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 
 PATCH_USER_LOGIN = "plane.authentication.middleware.proxy_auth.user_login"
 PATCH_LOGOUT = "plane.authentication.middleware.proxy_auth.logout"
@@ -140,7 +149,7 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
             middleware(request)
 
         assert Profile.objects.filter(user=existing_user).exists()
-        assert request.session.get("proxy_auth_profile_ensured") is True
+        assert request.session.get("proxy_auth_smb_membership_ensured") is True
 
     @pytest.mark.django_db
     def test_completes_onboarding_for_existing_unonboarded_profile(self, django_user_model):
@@ -204,11 +213,12 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
         mock_join.assert_called_once_with(existing_user)
 
     @pytest.mark.django_db
-    def test_skips_auto_join_for_fully_onboarded_profile(self, django_user_model):
+    def test_auto_join_runs_for_fully_onboarded_profile(self, django_user_model):
         """
         GIVEN  an authenticated user who is onboarded and has completed the tour
-        WHEN   the middleware processes the request
-        THEN   _auto_join_workspace is not called
+        WHEN   the middleware processes the first request of the session
+        THEN   _auto_join_workspace still runs, so the user picks up the SMB
+               project membership
         """
         existing_user = django_user_model.objects.create_user(
             email="done@example.com",
@@ -230,7 +240,7 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
         ) as mock_join:
             middleware(request)
 
-        mock_join.assert_not_called()
+        mock_join.assert_called_once_with(existing_user)
 
     @pytest.mark.django_db
     def test_profile_check_is_cached_for_the_session(self, django_user_model):
@@ -270,6 +280,7 @@ class TestProxyAuthMiddlewareAutoJoinWorkspace:
     @pytest.fixture
     def workspace(self, django_user_model, settings):
         settings.SMB_DEFAULT_WORKSPACE_NAME = self.SMB_SLUG
+        settings.SMB_NAME = "arbisoft"
         owner = django_user_model.objects.create_user(
             email="owner@example.com",
             username="owner_user",
@@ -325,6 +336,65 @@ class TestProxyAuthMiddlewareAutoJoinWorkspace:
         profile = Profile.objects.get(user=user)
         assert profile.is_tour_completed is True
         assert profile.last_workspace_id == other_workspace_id
+
+    @pytest.fixture
+    def smb_project(self, workspace):
+        return Project.objects.create(name="Arbisoft", identifier="ARBISOFT", workspace=workspace)
+
+    @pytest.fixture
+    def joiner(self, django_user_model):
+        return django_user_model.objects.create_user(
+            email="projectjoiner@example.com",
+            username="projectjoiner_user",
+            password="irrelevant",
+        )
+
+    @pytest.mark.django_db
+    def test_joins_smb_project_as_member(self, joiner, smb_project):
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        membership = ProjectMember.objects.get(project=smb_project, member=joiner)
+        assert membership.role == 15
+        assert membership.is_active is True
+        assert ProjectUserProperty.objects.filter(project=smb_project, user=joiner).exists()
+
+    @pytest.mark.django_db
+    def test_project_join_is_idempotent(self, joiner, smb_project):
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert ProjectMember.objects.filter(project=smb_project, member=joiner).count() == 1
+
+    @pytest.mark.django_db
+    def test_only_the_smb_project_is_joined(self, joiner, smb_project, workspace):
+        other = Project.objects.create(name="Other", identifier="OTHER", workspace=workspace)
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert not ProjectMember.objects.filter(project=other, member=joiner).exists()
+
+    @pytest.mark.django_db
+    def test_inactive_project_membership_is_not_reactivated(self, joiner, smb_project):
+        """
+        GIVEN  a user who left the SMB project or was removed by an admin
+        WHEN   _auto_join_workspace runs
+        THEN   the inactive membership stays inactive
+        """
+        ProjectMember.objects.create(project=smb_project, member=joiner, role=15, is_active=False)
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        membership = ProjectMember.objects.get(project=smb_project, member=joiner)
+        assert membership.is_active is False
+
+    @pytest.mark.django_db
+    def test_missing_smb_project_still_completes_onboarding(self, joiner, workspace):
+        Profile.objects.get_or_create(user=joiner)
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert not ProjectMember.objects.filter(member=joiner).exists()
+        assert Profile.objects.get(user=joiner).is_tour_completed is True
 
     @pytest.mark.django_db
     def test_no_workspace_leaves_profile_untouched(self, django_user_model, settings):

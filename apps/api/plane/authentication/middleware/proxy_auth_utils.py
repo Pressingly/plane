@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+import re
+
 _DEFAULT_BYPASS_PATHS = ["/god-mode", "/api/instances"]
+_PROJECT_IDENTIFIER_MAX_LENGTH = 10
 
 
 def _normalise_email(email: str) -> str:
@@ -20,3 +23,7 @@ def _coerce_bypass_paths(setting) -> list:
         paths = [p.strip() for p in setting.split(",") if p.strip()]
         return paths if paths else list(_DEFAULT_BYPASS_PATHS)
     return list(setting)
+
+
+def _smb_project_identifier(smb_name) -> str:
+    return re.sub(r"[^A-Z0-9]", "", (smb_name or "").upper())[:_PROJECT_IDENTIFIER_MAX_LENGTH]
