@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+import logging
 from uuid import uuid4
 
 import jwt
 from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.hashers import make_password
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 
 from plane.authentication.middleware.proxy_auth_utils import (
@@ -17,12 +18,26 @@ from plane.authentication.middleware.proxy_auth_utils import (
     _normalise_email,
 )
 from plane.authentication.utils.login import user_login
-from plane.db.models import Profile, User, Workspace, WorkspaceMember
+from plane.db.models import (
+    Profile,
+    Project,
+    ProjectMember,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from plane.db.models.workspace import ROLE_CHOICES
 
 # Build a label → value lookup so role names can be used symbolically.
 # e.g. _ROLE["Member"] == 15, _ROLE["Guest"] == 5, _ROLE["Admin"] == 20
 _ROLE = {label: value for value, label in ROLE_CHOICES}
+
+# Provisioning tags the SMB default project with this external_source and
+# external_id=SMB_NAME; the identifier is not used because it can collide with
+# an existing team project (SMB_NAME "foss" -> identifier "FOSS").
+SMB_DEFAULT_PROJECT_SOURCE = "smb-default"
+
+logger = logging.getLogger("plane.authentication")
 
 # Security note: X-Auth-Request-* header spoofing is not a concern because the
 # backend port is not exposed outside the internal Docker network. All traffic
@@ -37,8 +52,9 @@ _NEW_USER_FLAGS = {
     "is_email_verified": True,
 }
 
-# Session flag marking that this session's user is known to have a Profile.
-_PROFILE_ENSURED_KEY = "proxy_auth_profile_ensured"
+# Session flag marking that this session's user has had its Profile and SMB
+# memberships ensured. Renaming it makes every live session re-check once.
+_SESSION_ENSURED_KEY = "proxy_auth_smb_membership_ensured"
 
 
 def _check_corporate_id(request) -> bool:
@@ -102,14 +118,13 @@ class ProxyAuthMiddleware:
                 # session while still missing a Profile, and would otherwise
                 # keep 404ing on /api/users/me/profile/ until the session
                 # expires. Gate on a session flag so this runs once per session
-                # rather than once per request. A profile created here — or
-                # backfilled out of band — still has onboarding incomplete,
-                # which is what _auto_join_workspace finishes.
-                if not request.session.get(_PROFILE_ENSURED_KEY):
-                    profile, _ = Profile.objects.get_or_create(user=request.user)
-                    if not profile.is_onboarded:
-                        self._auto_join_workspace(request.user)
-                    request.session[_PROFILE_ENSURED_KEY] = True
+                # rather than once per request. _auto_join_workspace then
+                # finishes onboarding, the product tour and SMB memberships for
+                # users provisioned or backfilled out of band.
+                if not request.session.get(_SESSION_ENSURED_KEY):
+                    Profile.objects.get_or_create(user=request.user)
+                    self._auto_join_workspace(request.user)
+                    request.session[_SESSION_ENSURED_KEY] = True
                 return self.get_response(request)
 
             # Mismatch detected: proxy asserts a different identity than the
@@ -135,7 +150,7 @@ class ProxyAuthMiddleware:
         user_login(request=request, user=user, is_app=True)
         # _resolve_user just guaranteed the profile, so the next request on this
         # session can skip the check instead of re-running it once per login.
-        request.session[_PROFILE_ENSURED_KEY] = True
+        request.session[_SESSION_ENSURED_KEY] = True
         return self.get_response(request)
 
     @staticmethod
@@ -200,8 +215,9 @@ class ProxyAuthMiddleware:
     @staticmethod
     def _auto_join_workspace(user):
         """
-        On every login, ensure the user is a member of the first existing workspace
-        and that their onboarding is marked complete so Plane skips the wizard.
+        On every login, ensure the user is a member of the SMB workspace and its
+        default project, and that their onboarding and product tour are marked
+        complete so Plane skips the wizard and the welcome modal.
         If no workspace exists yet, do nothing — the normal create-workspace flow
         will be shown.
         Idempotent: get_or_create and conditional profile update make repeated
@@ -218,11 +234,14 @@ class ProxyAuthMiddleware:
             return
 
         # Role: Member — auto-joined SSO users get full member access, not guest.
-        WorkspaceMember.objects.get_or_create(
+        workspace_member, _ = WorkspaceMember.objects.get_or_create(
             workspace=workspace,
             member=user,
             defaults={"role": _ROLE["Member"], "is_active": True},
         )
+
+        if workspace_member.is_active:
+            ProxyAuthMiddleware._join_smb_project(user, workspace_member)
 
         # Only update profile if onboarding is not yet complete — avoids a
         # write on every request for already-onboarded users.
@@ -236,3 +255,39 @@ class ProxyAuthMiddleware:
                 "workspace_join": True,
             },
         )
+        Profile.objects.filter(user=user, is_tour_completed=False).update(
+            is_tour_completed=True
+        )
+
+    @staticmethod
+    def _join_smb_project(user, workspace_member):
+        smb_name = getattr(settings, "SMB_NAME", None)
+        if not smb_name:
+            return
+        project = Project.objects.filter(
+            workspace=workspace_member.workspace,
+            external_source=SMB_DEFAULT_PROJECT_SOURCE,
+            external_id=smb_name,
+            archived_at__isnull=True,
+        ).first()
+        if project is None:
+            return
+        # An inactive row means the user left or an admin removed them, so it
+        # is deliberately not reactivated.
+        try:
+            with transaction.atomic():
+                ProjectMember.objects.get_or_create(
+                    project=project,
+                    member=user,
+                    defaults={
+                        "role": workspace_member.role,
+                        "is_active": True,
+                    },
+                )
+        except IntegrityError:
+            logger.warning(
+                "SMB project auto-join failed for user %s on project %s",
+                user.id,
+                project.id,
+                exc_info=True,
+            )
