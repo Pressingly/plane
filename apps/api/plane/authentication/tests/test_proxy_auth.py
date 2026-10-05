@@ -44,6 +44,7 @@ import pytest
 from unittest.mock import MagicMock, Mock, patch
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
+from django.utils import timezone
 
 from plane.authentication.middleware.proxy_auth import ProxyAuthMiddleware
 from plane.db.models import (
@@ -183,55 +184,28 @@ class TestProxyAuthMiddlewareAlreadyAuthenticated:
         mock_join.assert_called_once_with(existing_user)
 
     @pytest.mark.django_db
-    def test_completes_tour_for_onboarded_profile_with_pending_tour(self, django_user_model):
+    @pytest.mark.parametrize("is_tour_completed", [False, True])
+    def test_auto_join_runs_for_onboarded_profile(self, django_user_model, is_tour_completed):
         """
-        GIVEN  an authenticated, onboarded user whose product tour is still
-               pending — e.g. pre-created by provisioning
-        WHEN   the middleware processes the request
-        THEN   _auto_join_workspace runs so the welcome modal is skipped
-        """
-        existing_user = django_user_model.objects.create_user(
-            email="pendingtour@example.com",
-            username="pendingtour_user",
-            password="irrelevant",
-        )
-        Profile.objects.update_or_create(
-            user=existing_user, defaults={"is_onboarded": True, "is_tour_completed": False}
-        )
-
-        middleware = make_middleware()
-        request = make_request(
-            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "pendingtour@example.com"},
-            authenticated_user=existing_user,
-        )
-
-        with patch(PATCH_USER_LOGIN), patch.object(
-            ProxyAuthMiddleware, "_auto_join_workspace"
-        ) as mock_join:
-            middleware(request)
-
-        mock_join.assert_called_once_with(existing_user)
-
-    @pytest.mark.django_db
-    def test_auto_join_runs_for_fully_onboarded_profile(self, django_user_model):
-        """
-        GIVEN  an authenticated user who is onboarded and has completed the tour
+        GIVEN  an authenticated, onboarded user, with the product tour pending
+               (e.g. pre-created by provisioning) or already completed
         WHEN   the middleware processes the first request of the session
-        THEN   _auto_join_workspace still runs, so the user picks up the SMB
-               project membership
+        THEN   _auto_join_workspace runs, so the welcome modal is skipped and
+               the user picks up the SMB project membership
         """
         existing_user = django_user_model.objects.create_user(
-            email="done@example.com",
-            username="done_user",
+            email="onboarded@example.com",
+            username="onboarded_user",
             password="irrelevant",
         )
         Profile.objects.update_or_create(
-            user=existing_user, defaults={"is_onboarded": True, "is_tour_completed": True}
+            user=existing_user,
+            defaults={"is_onboarded": True, "is_tour_completed": is_tour_completed},
         )
 
         middleware = make_middleware()
         request = make_request(
-            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "done@example.com"},
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "onboarded@example.com"},
             authenticated_user=existing_user,
         )
 
@@ -339,7 +313,13 @@ class TestProxyAuthMiddlewareAutoJoinWorkspace:
 
     @pytest.fixture
     def smb_project(self, workspace):
-        return Project.objects.create(name="Arbisoft", identifier="ARBISOFT", workspace=workspace)
+        return Project.objects.create(
+            name="Arbisoft",
+            identifier="ARBISOFT",
+            workspace=workspace,
+            external_source="smb-default",
+            external_id="arbisoft",
+        )
 
     @pytest.fixture
     def joiner(self, django_user_model):
@@ -395,6 +375,81 @@ class TestProxyAuthMiddlewareAutoJoinWorkspace:
 
         assert not ProjectMember.objects.filter(member=joiner).exists()
         assert Profile.objects.get(user=joiner).is_tour_completed is True
+
+    @pytest.mark.django_db
+    def test_inactive_workspace_member_is_not_joined_to_project(
+        self, joiner, workspace, smb_project
+    ):
+        WorkspaceMember.objects.create(workspace=workspace, member=joiner, role=15, is_active=False)
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert not ProjectMember.objects.filter(project=smb_project, member=joiner).exists()
+
+    @pytest.mark.django_db
+    def test_workspace_guest_joins_project_as_guest(self, joiner, workspace, smb_project):
+        WorkspaceMember.objects.create(workspace=workspace, member=joiner, role=5, is_active=True)
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert ProjectMember.objects.get(project=smb_project, member=joiner).role == 5
+
+    @pytest.mark.django_db
+    def test_archived_smb_project_is_not_joined(self, joiner, smb_project):
+        Project.objects.filter(pk=smb_project.pk).update(archived_at=timezone.now())
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert not ProjectMember.objects.filter(project=smb_project, member=joiner).exists()
+
+    @pytest.mark.django_db
+    def test_untagged_project_with_matching_identifier_is_not_joined(self, joiner, workspace):
+        """
+        GIVEN  a Secret team project whose identifier happens to equal the
+               uppercased SMB_NAME but which provisioning did not tag
+        WHEN   _auto_join_workspace runs
+        THEN   the user is not joined to it
+        """
+        team_project = Project.objects.create(
+            name="Team board", identifier="ARBISOFT", workspace=workspace, network=0
+        )
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert not ProjectMember.objects.filter(project=team_project, member=joiner).exists()
+
+    @pytest.mark.django_db
+    def test_unset_smb_name_skips_project_join(self, joiner, workspace, smb_project, settings):
+        settings.SMB_NAME = None
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert WorkspaceMember.objects.filter(workspace=workspace, member=joiner).exists()
+        assert not ProjectMember.objects.filter(project=smb_project, member=joiner).exists()
+
+    @pytest.mark.django_db
+    def test_project_join_integrity_error_does_not_break_login(self, joiner, workspace, smb_project):
+        """
+        GIVEN  an orphan ProjectUserProperty that makes ProjectMember.save raise
+               IntegrityError
+        WHEN   the middleware handles the first request of the session
+        THEN   the error is contained, onboarding still completes and the
+               session is flagged, so the user is not looped into 500s
+        """
+        Profile.objects.get_or_create(user=joiner)
+        ProjectUserProperty.objects.create(project=smb_project, user=joiner, workspace=workspace)
+        middleware = make_middleware()
+        request = make_request(
+            meta={"HTTP_X_AUTH_REQUEST_EMAIL": "projectjoiner@example.com"},
+            authenticated_user=joiner,
+        )
+
+        with patch(PATCH_USER_LOGIN):
+            middleware(request)
+
+        assert not ProjectMember.objects.filter(project=smb_project, member=joiner).exists()
+        assert Profile.objects.get(user=joiner).is_tour_completed is True
+        assert request.session.get("proxy_auth_smb_membership_ensured") is True
 
     @pytest.mark.django_db
     def test_no_workspace_leaves_profile_untouched(self, django_user_model, settings):

@@ -17,7 +17,6 @@ from plane.authentication.middleware.proxy_auth_utils import (
     _coerce_bypass_paths,
     _is_bypass_path,
     _normalise_email,
-    _smb_project_identifier,
 )
 
 
@@ -113,23 +112,3 @@ class TestCoerceBypassPaths:
         result = _coerce_bypass_paths(None)
         result.append("/extra")
         assert "/extra" not in _DEFAULT_BYPASS_PATHS
-
-
-# ---------------------------------------------------------------------------
-# _smb_project_identifier
-# ---------------------------------------------------------------------------
-
-
-class TestSmbProjectIdentifier:
-    def test_uppercases_smb_name(self):
-        assert _smb_project_identifier("arbisoft") == "ARBISOFT"
-
-    def test_drops_characters_plane_rejects(self):
-        assert _smb_project_identifier("acme-corp.io") == "ACMECORPIO"
-
-    def test_truncates_to_plane_ui_limit(self):
-        assert _smb_project_identifier("northlightsmb") == "NORTHLIGHT"
-
-    def test_missing_name_yields_empty(self):
-        assert _smb_project_identifier(None) == ""
-        assert _smb_project_identifier("") == ""

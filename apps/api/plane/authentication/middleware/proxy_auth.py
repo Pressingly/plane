@@ -2,20 +2,20 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+import logging
 from uuid import uuid4
 
 import jwt
 from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.hashers import make_password
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 
 from plane.authentication.middleware.proxy_auth_utils import (
     _coerce_bypass_paths,
     _is_bypass_path,
     _normalise_email,
-    _smb_project_identifier,
 )
 from plane.authentication.utils.login import user_login
 from plane.db.models import (
@@ -31,6 +31,13 @@ from plane.db.models.workspace import ROLE_CHOICES
 # Build a label → value lookup so role names can be used symbolically.
 # e.g. _ROLE["Member"] == 15, _ROLE["Guest"] == 5, _ROLE["Admin"] == 20
 _ROLE = {label: value for value, label in ROLE_CHOICES}
+
+# Provisioning tags the SMB default project with this external_source and
+# external_id=SMB_NAME; the identifier is not used because it can collide with
+# an existing team project (SMB_NAME "foss" -> identifier "FOSS").
+SMB_DEFAULT_PROJECT_SOURCE = "smb-default"
+
+logger = logging.getLogger("plane.authentication")
 
 # Security note: X-Auth-Request-* header spoofing is not a concern because the
 # backend port is not exposed outside the internal Docker network. All traffic
@@ -227,13 +234,14 @@ class ProxyAuthMiddleware:
             return
 
         # Role: Member — auto-joined SSO users get full member access, not guest.
-        WorkspaceMember.objects.get_or_create(
+        workspace_member, _ = WorkspaceMember.objects.get_or_create(
             workspace=workspace,
             member=user,
             defaults={"role": _ROLE["Member"], "is_active": True},
         )
 
-        ProxyAuthMiddleware._join_smb_project(user, workspace)
+        if workspace_member.is_active:
+            ProxyAuthMiddleware._join_smb_project(user, workspace_member)
 
         # Only update profile if onboarding is not yet complete — avoids a
         # write on every request for already-onboarded users.
@@ -252,17 +260,34 @@ class ProxyAuthMiddleware:
         )
 
     @staticmethod
-    def _join_smb_project(user, workspace):
-        identifier = _smb_project_identifier(getattr(settings, "SMB_NAME", ""))
-        if not identifier:
+    def _join_smb_project(user, workspace_member):
+        smb_name = getattr(settings, "SMB_NAME", None)
+        if not smb_name:
             return
-        project = Project.objects.filter(workspace=workspace, identifier=identifier).first()
+        project = Project.objects.filter(
+            workspace=workspace_member.workspace,
+            external_source=SMB_DEFAULT_PROJECT_SOURCE,
+            external_id=smb_name,
+            archived_at__isnull=True,
+        ).first()
         if project is None:
             return
         # An inactive row means the user left or an admin removed them, so it
         # is deliberately not reactivated.
-        ProjectMember.objects.get_or_create(
-            project=project,
-            member=user,
-            defaults={"role": _ROLE["Member"], "is_active": True},
-        )
+        try:
+            with transaction.atomic():
+                ProjectMember.objects.get_or_create(
+                    project=project,
+                    member=user,
+                    defaults={
+                        "role": min(workspace_member.role, _ROLE["Member"]),
+                        "is_active": True,
+                    },
+                )
+        except IntegrityError:
+            logger.warning(
+                "SMB project auto-join failed for user %s on project %s",
+                user.id,
+                project.id,
+                exc_info=True,
+            )
