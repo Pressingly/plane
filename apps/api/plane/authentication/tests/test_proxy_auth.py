@@ -395,6 +395,14 @@ class TestProxyAuthMiddlewareAutoJoinWorkspace:
         assert ProjectMember.objects.get(project=smb_project, member=joiner).role == 5
 
     @pytest.mark.django_db
+    def test_workspace_admin_joins_project_as_admin(self, joiner, workspace, smb_project):
+        WorkspaceMember.objects.create(workspace=workspace, member=joiner, role=20, is_active=True)
+
+        ProxyAuthMiddleware._auto_join_workspace(joiner)
+
+        assert ProjectMember.objects.get(project=smb_project, member=joiner).role == 20
+
+    @pytest.mark.django_db
     def test_archived_smb_project_is_not_joined(self, joiner, smb_project):
         Project.objects.filter(pk=smb_project.pk).update(archived_at=timezone.now())
 

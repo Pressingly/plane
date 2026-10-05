@@ -280,7 +280,7 @@ class ProxyAuthMiddleware:
                     project=project,
                     member=user,
                     defaults={
-                        "role": min(workspace_member.role, _ROLE["Member"]),
+                        "role": workspace_member.role,
                         "is_active": True,
                     },
                 )
