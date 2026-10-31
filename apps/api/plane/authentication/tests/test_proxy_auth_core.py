@@ -10,8 +10,6 @@ Run (from apps/api/):
     pytest plane/authentication/tests/test_proxy_auth_core.py -v
 """
 
-import pytest
-
 from plane.authentication.middleware.proxy_auth_utils import (
     _DEFAULT_BYPASS_PATHS,
     _coerce_bypass_paths,
