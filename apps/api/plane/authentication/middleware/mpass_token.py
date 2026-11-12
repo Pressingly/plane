@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+import time
+
 import jwt
 
 JWKS_LIFESPAN_SECONDS = 3600
-JWKS_FETCH_TIMEOUT_SECONDS = 5
+JWKS_FETCH_TIMEOUT_SECONDS = 2
+JWKS_FAILURE_BACKOFF_SECONDS = 30
 CLOCK_SKEW_LEEWAY_SECONDS = 60
 REQUIRED_CLAIMS = ["exp", "iat", "iss", "token_use"]
 
@@ -16,10 +19,31 @@ class InvalidMpassToken(Exception):
         self.reason = reason
 
 
+PLACEHOLDER_PREFIX = "CHANGE_ME_"
+
+
+def configured(value) -> str:
+    """A setting's value, or "" when it is unset or still an .env.example placeholder."""
+    text = (value or "").strip()
+    return "" if text.startswith(PLACEHOLDER_PREFIX) else text
+
+
 def cognito_issuer(region: str, pool_id: str) -> str:
+    region, pool_id = configured(region), configured(pool_id)
     if not region or not pool_id:
         return ""
     return f"https://cognito-idp.{region}.amazonaws.com/{pool_id}"
+
+
+def cognito_issuer_from_settings(settings) -> str:
+    """The Cognito issuer oauth2-proxy validates, falling back to the MCP region and pool vars."""
+    explicit = configured(getattr(settings, "MPASS_COGNITO_ISSUER_URL", "")).rstrip("/")
+    if explicit:
+        return explicit
+    return cognito_issuer(
+        getattr(settings, "COGNITO_AWS_REGION", ""),
+        getattr(settings, "COGNITO_USER_POOL_ID", ""),
+    )
 
 
 def jwks_url(issuer: str) -> str:
@@ -64,25 +88,34 @@ class MpassTokenVerifier:
     its own JWKS, and nothing else is.
     """
 
-    def __init__(self, issuers, client_id: str, jwks_client_factory=default_jwks_client):
+    def __init__(
+        self,
+        issuers,
+        client_id: str,
+        jwks_client_factory=default_jwks_client,
+        clock=time.monotonic,
+    ):
         self._issuers = frozenset(issuer for issuer in issuers if issuer)
         self._client_id = client_id
         self._jwks_client_factory = jwks_client_factory
+        self._clock = clock
         self._jwks_clients = {}
+        self._jwks_failed_at = {}
 
     @classmethod
     def from_settings(cls, settings):
         issuers = (
-            cognito_issuer(
-                getattr(settings, "COGNITO_AWS_REGION", ""),
-                getattr(settings, "COGNITO_USER_POOL_ID", ""),
-            ),
-            getattr(settings, "MPASS_TOKEN_ISSUER_URL", ""),
+            cognito_issuer_from_settings(settings),
+            configured(getattr(settings, "MPASS_TOKEN_ISSUER_URL", "")).rstrip("/"),
         )
-        return cls(issuers, getattr(settings, "MPASS_OIDC_CLIENT_ID", ""))
+        return cls(issuers, configured(getattr(settings, "MPASS_OIDC_CLIENT_ID", "")))
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self._issuers and self._client_id)
 
     def verify(self, token: str) -> dict:
-        if not self._issuers or not self._client_id:
+        if not self.is_configured:
             raise InvalidMpassToken("verifier_unconfigured")
         issuer = _unverified_issuer(token)
         if issuer not in self._issuers:
@@ -113,12 +146,19 @@ class MpassTokenVerifier:
             raise InvalidMpassToken("invalid") from exc
 
     def _signing_key(self, token: str, issuer: str):
+        if self._recently_failed(issuer):
+            raise InvalidMpassToken("jwks_unavailable")
         try:
             return self._jwks_client(issuer).get_signing_key_from_jwt(token).key
-        except jwt.PyJWKClientConnectionError as exc:
+        except (jwt.PyJWKClientConnectionError, ValueError, OSError) as exc:
+            self._jwks_failed_at[issuer] = self._clock()
             raise InvalidMpassToken("jwks_unavailable") from exc
         except jwt.PyJWTError as exc:
             raise InvalidMpassToken("unknown_signing_key") from exc
+
+    def _recently_failed(self, issuer: str) -> bool:
+        failed_at = self._jwks_failed_at.get(issuer)
+        return failed_at is not None and self._clock() - failed_at < JWKS_FAILURE_BACKOFF_SECONDS
 
     def _jwks_client(self, issuer: str):
         if issuer not in self._jwks_clients:

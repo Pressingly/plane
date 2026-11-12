@@ -24,8 +24,10 @@ from plane.authentication.middleware.edge_trust import request_is_from_edge
 from plane.authentication.middleware.mpass_token import (
     InvalidMpassToken,
     MpassTokenVerifier,
+    JWKS_FAILURE_BACKOFF_SECONDS,
     audience_matches,
     cognito_issuer,
+    cognito_issuer_from_settings,
 )
 from plane.authentication.middleware.proxy_auth import ProxyAuthMiddleware
 from plane.db.models import User
@@ -112,6 +114,11 @@ def make_middleware(verifier=None):
 @pytest.fixture(autouse=True)
 def _mpass_settings(settings):
     settings.MPASS_EDGE_SECRET = EDGE_SECRET
+    settings.MPASS_COGNITO_ISSUER_URL = ""
+    settings.COGNITO_AWS_REGION = ""
+    settings.COGNITO_USER_POOL_ID = ""
+    settings.MPASS_TOKEN_ISSUER_URL = ""
+    settings.MPASS_OIDC_CLIENT_ID = ""
     settings.SMB_CORPORATE_ID = None
     settings.SMB_DEFAULT_WORKSPACE_NAME = None
     settings.SMB_NAME = None
@@ -403,3 +410,176 @@ class TestMpassTokenVerifier:
     )
     def test_audience_matches(self, claims, expected):
         assert audience_matches(claims, CLIENT_ID) is expected
+
+
+class FailingJwksClient:
+    def __init__(self, error):
+        self.error = error
+        self.calls = 0
+
+    def get_signing_key_from_jwt(self, token):
+        self.calls += 1
+        raise self.error
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+class TestCognitoIssuerFromSettings:
+    def test_explicit_issuer_wins_and_loses_trailing_slash(self, settings):
+        settings.MPASS_COGNITO_ISSUER_URL = COGNITO_ISSUER + "/"
+        settings.COGNITO_AWS_REGION = "eu-west-1"
+        settings.COGNITO_USER_POOL_ID = "eu-west-1_other"
+
+        assert cognito_issuer_from_settings(settings) == COGNITO_ISSUER
+
+    def test_falls_back_to_region_and_pool(self, settings):
+        settings.COGNITO_AWS_REGION = "us-east-1"
+        settings.COGNITO_USER_POOL_ID = "us-east-1_pool"
+
+        assert cognito_issuer_from_settings(settings) == COGNITO_ISSUER
+
+    def test_placeholders_are_ignored(self, settings):
+        settings.MPASS_COGNITO_ISSUER_URL = "CHANGE_ME_OIDC_BASE_URI"
+        settings.COGNITO_AWS_REGION = "CHANGE_ME_COGNITO_AWS_REGION"
+        settings.COGNITO_USER_POOL_ID = "CHANGE_ME_COGNITO_USER_POOL_ID"
+
+        assert cognito_issuer_from_settings(settings) == ""
+
+    def test_placeholder_explicit_issuer_falls_back(self, settings):
+        settings.MPASS_COGNITO_ISSUER_URL = "CHANGE_ME_OIDC_BASE_URI"
+        settings.COGNITO_AWS_REGION = "us-east-1"
+        settings.COGNITO_USER_POOL_ID = "us-east-1_pool"
+
+        assert cognito_issuer_from_settings(settings) == COGNITO_ISSUER
+
+    def test_placeholder_client_id_leaves_verifier_unconfigured(self, settings):
+        settings.MPASS_COGNITO_ISSUER_URL = COGNITO_ISSUER
+        settings.MPASS_OIDC_CLIENT_ID = "CHANGE_ME_OIDC_CLIENT_ID"
+
+        assert MpassTokenVerifier.from_settings(settings).is_configured is False
+
+    def test_explicit_issuer_verifies_tokens(self, settings):
+        settings.MPASS_COGNITO_ISSUER_URL = COGNITO_ISSUER
+        settings.MPASS_OIDC_CLIENT_ID = CLIENT_ID
+        verifier = MpassTokenVerifier.from_settings(settings)
+        verifier._jwks_client_factory = lambda issuer: FakeJwksClient(SIGNING_KEY.public_key())
+
+        assert verifier.verify(sign(access_token_claims()))["sub"] == "sub-1"
+
+
+class TestMisconfiguredGateIsLogged:
+    def test_gate_on_without_issuer_logs_error(self, settings, caplog):
+        settings.SMB_CORPORATE_ID = CORPORATE_ID
+        settings.MPASS_OIDC_CLIENT_ID = CLIENT_ID
+
+        with caplog.at_level(logging.ERROR):
+            ProxyAuthMiddleware(MagicMock())
+
+        assert "SMB_CORPORATE_ID is set but no token issuer or client id" in caplog.text
+
+    def test_gate_on_without_client_id_logs_error(self, settings, caplog):
+        settings.SMB_CORPORATE_ID = CORPORATE_ID
+        settings.MPASS_COGNITO_ISSUER_URL = COGNITO_ISSUER
+
+        with caplog.at_level(logging.ERROR):
+            ProxyAuthMiddleware(MagicMock())
+
+        assert "SMB_CORPORATE_ID is set but no token issuer or client id" in caplog.text
+
+    def test_configured_gate_logs_nothing(self, settings, caplog):
+        settings.SMB_CORPORATE_ID = CORPORATE_ID
+        settings.MPASS_COGNITO_ISSUER_URL = COGNITO_ISSUER
+        settings.MPASS_OIDC_CLIENT_ID = CLIENT_ID
+
+        with caplog.at_level(logging.ERROR):
+            ProxyAuthMiddleware(MagicMock())
+
+        assert "SMB_CORPORATE_ID is set" not in caplog.text
+
+    def test_gate_off_logs_nothing(self, caplog):
+        with caplog.at_level(logging.ERROR):
+            ProxyAuthMiddleware(MagicMock())
+
+        assert "SMB_CORPORATE_ID is set" not in caplog.text
+
+
+class TestJwksFailures:
+    @pytest.mark.parametrize(
+        "error",
+        [ValueError("JWKS body is not JSON"), ConnectionResetError("reset"), OSError("unreachable")],
+    )
+    def test_fetch_errors_fail_closed(self, error):
+        verifier = MpassTokenVerifier(
+            (COGNITO_ISSUER,), CLIENT_ID, jwks_client_factory=lambda issuer: FailingJwksClient(error)
+        )
+
+        with pytest.raises(InvalidMpassToken) as excinfo:
+            verifier.verify(sign(access_token_claims()))
+
+        assert excinfo.value.reason == "jwks_unavailable"
+
+    @pytest.mark.django_db
+    def test_non_json_jwks_returns_403_not_500(self, settings):
+        settings.SMB_CORPORATE_ID = CORPORATE_ID
+        verifier = MpassTokenVerifier(
+            (COGNITO_ISSUER,),
+            CLIENT_ID,
+            jwks_client_factory=lambda issuer: FailingJwksClient(ValueError("not json")),
+        )
+        middleware = make_middleware(verifier)
+
+        with patch(PATCH_USER_LOGIN) as mock_login:
+            response = middleware(make_request(meta=proxied(token=sign(access_token_claims()))))
+
+        mock_login.assert_not_called()
+        assert response.status_code == 403
+
+    def test_failed_fetch_is_not_retried_within_backoff(self):
+        client = FailingJwksClient(jwt.PyJWKClientConnectionError("down"))
+        clock = FakeClock()
+        verifier = MpassTokenVerifier(
+            (COGNITO_ISSUER,), CLIENT_ID, jwks_client_factory=lambda issuer: client, clock=clock
+        )
+        token = sign(access_token_claims())
+
+        for _ in range(3):
+            with pytest.raises(InvalidMpassToken):
+                verifier.verify(token)
+
+        assert client.calls == 1
+
+    def test_fetch_is_retried_after_backoff(self):
+        client = FailingJwksClient(jwt.PyJWKClientConnectionError("down"))
+        clock = FakeClock()
+        verifier = MpassTokenVerifier(
+            (COGNITO_ISSUER,), CLIENT_ID, jwks_client_factory=lambda issuer: client, clock=clock
+        )
+        token = sign(access_token_claims())
+
+        with pytest.raises(InvalidMpassToken):
+            verifier.verify(token)
+        clock.now += JWKS_FAILURE_BACKOFF_SECONDS
+        with pytest.raises(InvalidMpassToken):
+            verifier.verify(token)
+
+        assert client.calls == 2
+
+    def test_backoff_is_per_issuer(self):
+        clients = {
+            COGNITO_ISSUER: FailingJwksClient(jwt.PyJWKClientConnectionError("down")),
+            MPASS_ISSUER: FakeJwksClient(SIGNING_KEY.public_key()),
+        }
+        verifier = MpassTokenVerifier(
+            (COGNITO_ISSUER, MPASS_ISSUER), CLIENT_ID, jwks_client_factory=clients.__getitem__, clock=FakeClock()
+        )
+
+        with pytest.raises(InvalidMpassToken):
+            verifier.verify(sign(access_token_claims()))
+
+        assert verifier.verify(sign(id_token_claims()))["sub"] == "sub-1"

@@ -120,6 +120,11 @@ class ProxyAuthMiddleware:
                 "MPASS_EDGE_SECRET is unset or shorter than 32 characters: "
                 "mPass identity headers will be ignored and SSO login is disabled"
             )
+        if getattr(settings, "SMB_CORPORATE_ID", None) and not self.token_verifier.is_configured:
+            logger.error(
+                "SMB_CORPORATE_ID is set but no token issuer or client id is configured "
+                "(MPASS_COGNITO_ISSUER_URL, MPASS_OIDC_CLIENT_ID): every mPass login will be refused"
+            )
 
     def __call__(self, request):
         # Bypass paths use their own auth (god-mode local login, instance admin).
