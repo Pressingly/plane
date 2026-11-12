@@ -4,12 +4,15 @@
 
 import hmac
 
+from plane.authentication.middleware.config_values import configured
+
 EDGE_SECRET_HEADER = "HTTP_X_MPASS_EDGE_SECRET"
 MIN_EDGE_SECRET_LENGTH = 32
 
 
 def edge_secret_is_usable(secret: str) -> bool:
-    return len(secret) >= MIN_EDGE_SECRET_LENGTH
+    """A CHANGE_ME_ placeholder counts as unset at any length, so it trusts nothing."""
+    return len(configured(secret)) >= MIN_EDGE_SECRET_LENGTH
 
 
 def request_is_from_edge(request, secret: str) -> bool:

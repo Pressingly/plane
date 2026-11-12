@@ -11,6 +11,7 @@ from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 
+from plane.authentication.middleware.config_values import configured
 from plane.authentication.middleware.edge_trust import (
     edge_secret_is_usable,
     request_is_from_edge,
@@ -18,6 +19,7 @@ from plane.authentication.middleware.edge_trust import (
 from plane.authentication.middleware.mpass_token import (
     InvalidMpassToken,
     MpassTokenVerifier,
+    cognito_issuer_from_settings,
 )
 from plane.authentication.middleware.proxy_auth_utils import (
     _coerce_bypass_paths,
@@ -71,12 +73,16 @@ def _mpass_id_for_logs(request) -> str:
     return next((value for value in candidates if value and "@" not in value), "-")
 
 
+def _expected_corporate_id() -> str:
+    return configured(getattr(settings, "SMB_CORPORATE_ID", None))
+
+
 def _corporate_rejection(request, token_verifier) -> str | None:
     """Why the caller fails the SMB corporate gate, or None when it passes.
 
     When SMB_CORPORATE_ID is not set the gate is off and no token is read.
     """
-    expected = getattr(settings, "SMB_CORPORATE_ID", None)
+    expected = _expected_corporate_id()
     if not expected:
         return None
     access_token = request.META.get(_ACCESS_TOKEN_HEADER)
@@ -117,13 +123,23 @@ class ProxyAuthMiddleware:
         self.token_verifier = token_verifier or MpassTokenVerifier.from_settings(settings)
         if not edge_secret_is_usable(self.edge_secret):
             logger.error(
-                "MPASS_EDGE_SECRET is unset or shorter than 32 characters: "
+                "MPASS_EDGE_SECRET is unset, a CHANGE_ME_ placeholder or shorter than 32 characters: "
                 "mPass identity headers will be ignored and SSO login is disabled"
             )
-        if getattr(settings, "SMB_CORPORATE_ID", None) and not self.token_verifier.is_configured:
+        if _expected_corporate_id():
+            self._log_corporate_gate_misconfiguration()
+
+    def _log_corporate_gate_misconfiguration(self):
+        if not self.token_verifier.is_configured:
             logger.error(
                 "SMB_CORPORATE_ID is set but no token issuer or client id is configured "
                 "(MPASS_COGNITO_ISSUER_URL, MPASS_OIDC_CLIENT_ID): every mPass login will be refused"
+            )
+        if not cognito_issuer_from_settings(settings):
+            logger.error(
+                "SMB_CORPORATE_ID is set but the Cognito issuer is empty (MPASS_COGNITO_ISSUER_URL, "
+                "or COGNITO_AWS_REGION and COGNITO_USER_POOL_ID): browser sessions forward "
+                "Cognito-issued tokens, so every browser mPass login will be refused"
             )
 
     def __call__(self, request):

@@ -2,30 +2,20 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
-import time
-
 import jwt
 
-JWKS_LIFESPAN_SECONDS = 3600
-JWKS_FETCH_TIMEOUT_SECONDS = 2
-JWKS_FAILURE_BACKOFF_SECONDS = 30
+from plane.authentication.middleware.config_values import configured
+from plane.authentication.middleware.jwks_cache import JwksCache, JwksUnavailable
+
 CLOCK_SKEW_LEEWAY_SECONDS = 60
 REQUIRED_CLAIMS = ["exp", "iat", "iss", "token_use"]
+ALLOWED_ALGORITHMS = ["RS256"]
 
 
 class InvalidMpassToken(Exception):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
-
-
-PLACEHOLDER_PREFIX = "CHANGE_ME_"
-
-
-def configured(value) -> str:
-    """A setting's value, or "" when it is unset or still an .env.example placeholder."""
-    text = (value or "").strip()
-    return "" if text.startswith(PLACEHOLDER_PREFIX) else text
 
 
 def cognito_issuer(region: str, pool_id: str) -> str:
@@ -43,19 +33,6 @@ def cognito_issuer_from_settings(settings) -> str:
     return cognito_issuer(
         getattr(settings, "COGNITO_AWS_REGION", ""),
         getattr(settings, "COGNITO_USER_POOL_ID", ""),
-    )
-
-
-def jwks_url(issuer: str) -> str:
-    return issuer.rstrip("/") + "/.well-known/jwks.json"
-
-
-def default_jwks_client(issuer: str) -> jwt.PyJWKClient:
-    return jwt.PyJWKClient(
-        jwks_url(issuer),
-        cache_keys=True,
-        lifespan=JWKS_LIFESPAN_SECONDS,
-        timeout=JWKS_FETCH_TIMEOUT_SECONDS,
     )
 
 
@@ -79,6 +56,13 @@ def _unverified_issuer(token: str) -> str:
     return claims.get("iss") or ""
 
 
+def _unverified_header(token: str) -> dict:
+    try:
+        return jwt.get_unverified_header(token)
+    except jwt.PyJWTError as exc:
+        raise InvalidMpassToken("malformed") from exc
+
+
 class MpassTokenVerifier:
     """Verifies the mPass token oauth2-proxy forwards in X-Auth-Request-Access-Token.
 
@@ -88,19 +72,10 @@ class MpassTokenVerifier:
     its own JWKS, and nothing else is.
     """
 
-    def __init__(
-        self,
-        issuers,
-        client_id: str,
-        jwks_client_factory=default_jwks_client,
-        clock=time.monotonic,
-    ):
+    def __init__(self, issuers, client_id: str, jwks_cache=None):
         self._issuers = frozenset(issuer for issuer in issuers if issuer)
         self._client_id = client_id
-        self._jwks_client_factory = jwks_client_factory
-        self._clock = clock
-        self._jwks_clients = {}
-        self._jwks_failed_at = {}
+        self._jwks_cache = jwks_cache or JwksCache()
 
     @classmethod
     def from_settings(cls, settings):
@@ -131,7 +106,7 @@ class MpassTokenVerifier:
             return jwt.decode(
                 token,
                 signing_key,
-                algorithms=["RS256"],
+                algorithms=ALLOWED_ALGORITHMS,
                 issuer=issuer,
                 leeway=CLOCK_SKEW_LEEWAY_SECONDS,
                 options={"verify_aud": False, "require": REQUIRED_CLAIMS},
@@ -146,21 +121,19 @@ class MpassTokenVerifier:
             raise InvalidMpassToken("invalid") from exc
 
     def _signing_key(self, token: str, issuer: str):
-        if self._recently_failed(issuer):
-            raise InvalidMpassToken("jwks_unavailable")
+        header = _unverified_header(token)
+        if header.get("alg") not in ALLOWED_ALGORITHMS:
+            raise InvalidMpassToken("invalid")
+        kid = header.get("kid")
+        if not kid:
+            raise InvalidMpassToken("unknown_signing_key")
+        key = self._keys(issuer).get(kid) or self._keys(issuer, refresh=True).get(kid)
+        if key is None:
+            raise InvalidMpassToken("unknown_signing_key")
+        return key.key
+
+    def _keys(self, issuer: str, refresh: bool = False) -> dict:
         try:
-            return self._jwks_client(issuer).get_signing_key_from_jwt(token).key
-        except (jwt.PyJWKClientConnectionError, ValueError, OSError) as exc:
-            self._jwks_failed_at[issuer] = self._clock()
+            return self._jwks_cache.keys_for(issuer, refresh=refresh)
+        except JwksUnavailable as exc:
             raise InvalidMpassToken("jwks_unavailable") from exc
-        except jwt.PyJWTError as exc:
-            raise InvalidMpassToken("unknown_signing_key") from exc
-
-    def _recently_failed(self, issuer: str) -> bool:
-        failed_at = self._jwks_failed_at.get(issuer)
-        return failed_at is not None and self._clock() - failed_at < JWKS_FAILURE_BACKOFF_SECONDS
-
-    def _jwks_client(self, issuer: str):
-        if issuer not in self._jwks_clients:
-            self._jwks_clients[issuer] = self._jwks_client_factory(issuer)
-        return self._jwks_clients[issuer]
