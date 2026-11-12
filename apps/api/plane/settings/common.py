@@ -126,6 +126,17 @@ SMB_NAME = os.environ.get("SMB_NAME")
 SMB_DEFAULT_WORKSPACE_NAME = os.environ.get("SMB_DEFAULT_WORKSPACE_NAME") or SMB_NAME
 SMB_CORPORATE_ID = os.environ.get("SMB_CORPORATE_ID")
 
+# Identity headers are trusted only on requests carrying this secret, which
+# Traefik injects on the SSO router alone. Unset or short: SSO login is off.
+MPASS_EDGE_SECRET = os.environ.get("MPASS_EDGE_SECRET", "")
+# Issuers and audience the forwarded mPass token is verified against when the
+# SMB_CORPORATE_ID gate is on. MPASS_TOKEN_ISSUER_URL is mpass-auth-proxy's
+# issuer, set only when it re-signs id_tokens (email capture on).
+COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
+COGNITO_AWS_REGION = os.environ.get("COGNITO_AWS_REGION", "")
+MPASS_TOKEN_ISSUER_URL = os.environ.get("MPASS_TOKEN_ISSUER_URL", "")
+MPASS_OIDC_CLIENT_ID = os.environ.get("MPASS_OIDC_CLIENT_ID", "")
+
 # Middlewares
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",

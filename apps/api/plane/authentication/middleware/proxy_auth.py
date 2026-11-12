@@ -5,13 +5,20 @@
 import logging
 from uuid import uuid4
 
-import jwt
 from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 
+from plane.authentication.middleware.edge_trust import (
+    edge_secret_is_usable,
+    request_is_from_edge,
+)
+from plane.authentication.middleware.mpass_token import (
+    InvalidMpassToken,
+    MpassTokenVerifier,
+)
 from plane.authentication.middleware.proxy_auth_utils import (
     _coerce_bypass_paths,
     _is_bypass_path,
@@ -39,14 +46,6 @@ SMB_DEFAULT_PROJECT_SOURCE = "smb-default"
 
 logger = logging.getLogger("plane.authentication")
 
-# Security note: X-Auth-Request-* header spoofing is not a concern because the
-# backend port is not exposed outside the internal Docker network. All traffic
-# must pass through Traefik, which calls oauth2-proxy ForwardAuth and overwrites
-# these headers before forwarding to the app. If the backend port is ever
-# exposed directly (e.g. for debugging), remove it before deploying to
-# production — a client with direct access could spoof X-Auth-Request-Email
-# and impersonate any account.
-
 _NEW_USER_FLAGS = {
     "is_password_autoset": True,
     "is_email_verified": True,
@@ -57,27 +56,41 @@ _NEW_USER_FLAGS = {
 _SESSION_ENSURED_KEY = "proxy_auth_smb_membership_ensured"
 
 
-def _check_corporate_id(request) -> bool:
-    """Verify the caller's access token contains a corporate_id matching this deployment.
+_IDENTITY_HEADERS = ("HTTP_X_AUTH_REQUEST_EMAIL", "HTTP_X_AUTH_REQUEST_USER")
+_MPASS_ID_HEADERS = ("HTTP_X_AUTH_REQUEST_USER", "HTTP_X_AUTH_REQUEST_PREFERRED_USERNAME")
+_ACCESS_TOKEN_HEADER = "HTTP_X_AUTH_REQUEST_ACCESS_TOKEN"
 
-    When SMB_CORPORATE_ID is configured, only corporate mPass tokens whose
-    ``custom:corporate_id`` claim matches are allowed through. Individual
-    (non-corporate) tokens are rejected. When SMB_CORPORATE_ID is not set,
-    the check is skipped entirely for backward compatibility.
+
+def _carries_identity_headers(request) -> bool:
+    return any(request.META.get(header) for header in _IDENTITY_HEADERS)
+
+
+def _mpass_id_for_logs(request) -> str:
+    """The caller's mPass id, never an email: with email capture on, X-Auth-Request-User is the email."""
+    candidates = (request.META.get(header, "").strip() for header in _MPASS_ID_HEADERS)
+    return next((value for value in candidates if value and "@" not in value), "-")
+
+
+def _corporate_rejection(request, token_verifier) -> str | None:
+    """Why the caller fails the SMB corporate gate, or None when it passes.
+
+    When SMB_CORPORATE_ID is not set the gate is off and no token is read.
     """
     expected = getattr(settings, "SMB_CORPORATE_ID", None)
     if not expected:
-        return True
-    access_token = request.META.get("HTTP_X_AUTH_REQUEST_ACCESS_TOKEN")
+        return None
+    access_token = request.META.get(_ACCESS_TOKEN_HEADER)
     if not access_token:
-        return False
+        return "missing_token"
     try:
-        claims = jwt.decode(access_token, options={"verify_signature": False})
-    except Exception:
-        return False
+        claims = token_verifier.verify(access_token)
+    except InvalidMpassToken as exc:
+        return exc.reason
     if claims.get("custom:is_corporate") != "true":
-        return False
-    return claims.get("custom:corporate_id") == expected
+        return "not_corporate"
+    if claims.get("custom:corporate_id") != expected:
+        return "wrong_organization"
+    return None
 
 
 class ProxyAuthMiddleware:
@@ -90,14 +103,23 @@ class ProxyAuthMiddleware:
     native Django session — so the rest of the app sees a fully authenticated
     request.user just as it would after a normal login.
 
+    The headers are honoured only on requests carrying MPASS_EDGE_SECRET in
+    X-Mpass-Edge-Secret, which Traefik sets on the SSO router; on any other
+    request they are ignored and Plane's own authentication applies.
+
     To disable, remove this class from the MIDDLEWARE list in settings.
     """
 
-    def __init__(self, get_response):
+    def __init__(self, get_response, token_verifier=None):
         self.get_response = get_response
-        self.bypass_paths = _coerce_bypass_paths(
-            getattr(settings, "MPASS_BYPASS_PATHS", None)
-        )
+        self.bypass_paths = _coerce_bypass_paths(getattr(settings, "MPASS_BYPASS_PATHS", None))
+        self.edge_secret = (getattr(settings, "MPASS_EDGE_SECRET", "") or "").strip()
+        self.token_verifier = token_verifier or MpassTokenVerifier.from_settings(settings)
+        if not edge_secret_is_usable(self.edge_secret):
+            logger.error(
+                "MPASS_EDGE_SECRET is unset or shorter than 32 characters: "
+                "mPass identity headers will be ignored and SSO login is disabled"
+            )
 
     def __call__(self, request):
         # Bypass paths use their own auth (god-mode local login, instance admin).
@@ -106,7 +128,7 @@ class ProxyAuthMiddleware:
         if _is_bypass_path(request.path, self.bypass_paths):
             return self.get_response(request)
 
-        email = _normalise_email(self._read_proxy_email(request))
+        email = _normalise_email(self._read_trusted_proxy_email(request))
 
         if request.user.is_authenticated:
             # Short-circuit only when the upstream-asserted identity matches the
@@ -137,7 +159,14 @@ class ProxyAuthMiddleware:
         if not email:
             return self.get_response(request)
 
-        if not _check_corporate_id(request):
+        rejection = _corporate_rejection(request, self.token_verifier)
+        if rejection:
+            logger.warning(
+                "mPass proxy login refused: reason=%s mpass_id=%s path=%s",
+                rejection,
+                _mpass_id_for_logs(request),
+                request.path,
+            )
             return JsonResponse({"error": "access_denied"}, status=403)
 
         user = self._resolve_user(email)
@@ -152,6 +181,23 @@ class ProxyAuthMiddleware:
         # session can skip the check instead of re-running it once per login.
         request.session[_SESSION_ENSURED_KEY] = True
         return self.get_response(request)
+
+    def _read_trusted_proxy_email(self, request):
+        """The proxy-asserted email, or "" when the request did not come through the edge.
+
+        Untrusted identity headers are dropped before anything acts on them, so a
+        forged header can neither log anyone in nor end an existing session.
+        """
+        if request_is_from_edge(request, self.edge_secret):
+            return self._read_proxy_email(request)
+        if _carries_identity_headers(request):
+            logger.warning(
+                "mPass identity headers ignored: request lacks the edge secret mpass_id=%s path=%s remote_addr=%s",
+                _mpass_id_for_logs(request),
+                request.path,
+                request.META.get("REMOTE_ADDR", "-"),
+            )
+        return ""
 
     @staticmethod
     def _read_proxy_email(request):

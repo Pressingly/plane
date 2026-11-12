@@ -57,6 +57,8 @@ from plane.db.models import (
     WorkspaceMember,
 )
 
+EDGE_SECRET = "e" * 64
+
 PATCH_USER_LOGIN = "plane.authentication.middleware.proxy_auth.user_login"
 PATCH_LOGOUT = "plane.authentication.middleware.proxy_auth.logout"
 
@@ -65,12 +67,24 @@ PATCH_LOGOUT = "plane.authentication.middleware.proxy_auth.logout"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_request(path="/api/issues/", meta=None, authenticated_user=None):
-    """Return a fake GET request with optional META headers and auth state."""
+@pytest.fixture(autouse=True)
+def _edge_secret(settings):
+    settings.MPASS_EDGE_SECRET = EDGE_SECRET
+    settings.SMB_CORPORATE_ID = None
+
+
+def make_request(path="/api/issues/", meta=None, authenticated_user=None, from_edge=True):
+    """Return a fake GET request with optional META headers and auth state.
+
+    from_edge adds the edge secret Traefik injects, so the identity headers in
+    meta are trusted as they are in production behind mPass.
+    """
     factory = RequestFactory()
     request = factory.get(path)
     request.session = {}
     request.user = authenticated_user if authenticated_user else AnonymousUser()
+    if from_edge:
+        request.META["HTTP_X_MPASS_EDGE_SECRET"] = EDGE_SECRET
     if meta:
         request.META.update(meta)
     return request
