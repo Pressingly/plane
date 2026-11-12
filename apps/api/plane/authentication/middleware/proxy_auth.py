@@ -11,7 +11,7 @@ from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 
-from plane.authentication.middleware.config_values import configured
+from plane.authentication.middleware.config_values import is_placeholder
 from plane.authentication.middleware.edge_trust import (
     edge_secret_is_usable,
     request_is_from_edge,
@@ -74,7 +74,8 @@ def _mpass_id_for_logs(request) -> str:
 
 
 def _expected_corporate_id() -> str:
-    return configured(getattr(settings, "SMB_CORPORATE_ID", None))
+    """The trimmed SMB_CORPORATE_ID; a CHANGE_ME_ placeholder is kept so the gate stays on and refuses."""
+    return (getattr(settings, "SMB_CORPORATE_ID", None) or "").strip()
 
 
 def _corporate_rejection(request, token_verifier) -> str | None:
@@ -85,6 +86,8 @@ def _corporate_rejection(request, token_verifier) -> str | None:
     expected = _expected_corporate_id()
     if not expected:
         return None
+    if is_placeholder(expected):
+        return "placeholder_config"
     access_token = request.META.get(_ACCESS_TOKEN_HEADER)
     if not access_token:
         return "missing_token"
@@ -130,6 +133,9 @@ class ProxyAuthMiddleware:
             self._log_corporate_gate_misconfiguration()
 
     def _log_corporate_gate_misconfiguration(self):
+        if is_placeholder(_expected_corporate_id()):
+            logger.error("SMB_CORPORATE_ID is a CHANGE_ME_ placeholder: every mPass login is refused")
+            return
         if not self.token_verifier.is_configured:
             logger.error(
                 "SMB_CORPORATE_ID is set but no token issuer or client id is configured "

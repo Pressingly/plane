@@ -220,6 +220,29 @@ class TestInFlightFetch:
         assert errors == []
         assert results == [{"k2"}] * 5
 
+    def test_rotation_refresh_waits_for_the_in_flight_fetch(self):
+        release, started = threading.Event(), threading.Event()
+        fetch, calls = self._blocking_fetcher(release, started)
+        clock = FakeClock()
+        cache = JwksCache(fetcher=ScriptedFetcher(jwks_body()), clock=clock, wait_timeout=5)
+        cache.keys_for(ISSUER)
+        cache._fetcher = fetch
+        clock.now += LIFESPAN_SECONDS
+
+        refresher, _, _ = self._call_concurrently(cache, 1)
+        assert started.wait(5)
+        results = []
+        waiter = threading.Thread(target=lambda: results.append(set(cache.keys_for(ISSUER, refresh=True))))
+        waiter.start()
+        waiter.join(0.2)
+        assert waiter.is_alive()
+        release.set()
+        waiter.join(5)
+        refresher[0].join(5)
+
+        assert len(calls) == 1
+        assert results == [{"k2"}]
+
     def test_expired_set_is_served_stale_while_one_refresh_is_in_flight(self):
         release, started = threading.Event(), threading.Event()
         fetch, calls = self._blocking_fetcher(release, started)

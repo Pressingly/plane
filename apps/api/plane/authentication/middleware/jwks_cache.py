@@ -106,7 +106,7 @@ class JwksCache:
         entry = self._entries.get(issuer)
         if entry and self._is_fresh(entry, refresh):
             return entry["keys"]
-        if self._backing_off(issuer) or (entry and issuer in self._in_flight):
+        if self._backing_off(issuer) or (entry and issuer in self._in_flight and not refresh):
             return self._serve_stale(issuer, entry)
         return None
 

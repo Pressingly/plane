@@ -355,8 +355,22 @@ class TestCorporateIdSetting:
 
         mock_login.assert_called_once()
 
-    @pytest.mark.parametrize("value", ["CHANGE_ME_SMB_CORPORATE_ID", "  CHANGE_ME_x ", "   "])
-    def test_placeholder_or_blank_corporate_id_turns_the_gate_off(self, value, settings):
+    @pytest.mark.parametrize("value", ["CHANGE_ME_SMB_CORPORATE_ID", "  CHANGE_ME_x "])
+    def test_placeholder_corporate_id_refuses_every_login(self, value, settings, caplog):
+        settings.SMB_CORPORATE_ID = value
+        verifier = MagicMock()
+        middleware = make_middleware(verifier)
+
+        with caplog.at_level(logging.WARNING), patch(PATCH_USER_LOGIN) as mock_login:
+            response = middleware(make_request(meta=proxied(token=sign(access_token_claims()))))
+
+        mock_login.assert_not_called()
+        verifier.verify.assert_not_called()
+        assert response.status_code == 403
+        assert "reason=placeholder_config" in caplog.text
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_blank_corporate_id_turns_the_gate_off(self, value, settings):
         settings.SMB_CORPORATE_ID = value
         verifier = MagicMock()
         middleware = make_middleware(verifier)
@@ -590,12 +604,13 @@ class TestMisconfiguredGateIsLogged:
 
         assert "SMB_CORPORATE_ID is set but the Cognito issuer is empty" in caplog.text
 
-    def test_placeholder_corporate_id_logs_no_gate_error(self, settings, caplog):
-        settings.SMB_CORPORATE_ID = "CHANGE_ME_SMB_CORPORATE_ID"
+    def test_placeholder_corporate_id_logs_error(self, settings, caplog):
+        settings.SMB_CORPORATE_ID = " CHANGE_ME_SMB_CORPORATE_ID "
 
         with caplog.at_level(logging.ERROR):
             ProxyAuthMiddleware(MagicMock())
 
+        assert "SMB_CORPORATE_ID is a CHANGE_ME_ placeholder: every mPass login is refused" in caplog.text
         assert "SMB_CORPORATE_ID is set" not in caplog.text
 
     def test_gate_off_logs_nothing(self, caplog):

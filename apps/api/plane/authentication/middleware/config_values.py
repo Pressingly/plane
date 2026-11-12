@@ -5,7 +5,11 @@
 PLACEHOLDER_PREFIX = "CHANGE_ME_"
 
 
+def is_placeholder(value: str) -> bool:
+    return value.startswith(PLACEHOLDER_PREFIX)
+
+
 def configured(value) -> str:
     """A setting's value, or "" when it is unset or still an .env.example placeholder."""
     text = (value or "").strip()
-    return "" if text.startswith(PLACEHOLDER_PREFIX) else text
+    return "" if is_placeholder(text) else text
