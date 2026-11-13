@@ -38,6 +38,8 @@ class TestAPITokenLogMiddleware:
     API_KEY = "plane_api_supersecretvalue"
     AUTHORIZATION = "Bearer secret-bearer-token"
     COOKIE = "sessionid=secret-session-value"
+    EDGE_SECRET = "edge-secret-value-that-traefik-injects"
+    MPASS_TOKEN = "header.mpass-access-token.signature"
 
     def _captured_log_data(self, middleware, request_factory):
         request = request_factory.get(
@@ -45,6 +47,8 @@ class TestAPITokenLogMiddleware:
             HTTP_X_API_KEY=self.API_KEY,
             HTTP_AUTHORIZATION=self.AUTHORIZATION,
             HTTP_COOKIE=self.COOKIE,
+            HTTP_X_MPASS_EDGE_SECRET=self.EDGE_SECRET,
+            HTTP_X_AUTH_REQUEST_ACCESS_TOKEN=self.MPASS_TOKEN,
         )
         request.user = AnonymousUser()
         response = HttpResponse(b"{}")
@@ -69,6 +73,8 @@ class TestAPITokenLogMiddleware:
         assert self.API_KEY not in log_data["headers"]
         assert self.AUTHORIZATION not in log_data["headers"]
         assert self.COOKIE not in log_data["headers"]
+        assert self.EDGE_SECRET not in log_data["headers"]
+        assert self.MPASS_TOKEN not in log_data["headers"]
         assert "[REDACTED]" in log_data["headers"]
 
     def test_no_log_without_api_key(self, middleware, request_factory):
