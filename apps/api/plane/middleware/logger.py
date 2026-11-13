@@ -114,7 +114,15 @@ class APITokenLogMiddleware:
             return "[Could not decode content]"
 
     # Headers whose values must never be persisted in plaintext logs
-    SENSITIVE_HEADERS = frozenset({"x-api-key", "authorization", "cookie"})
+    SENSITIVE_HEADERS = frozenset(
+        {
+            "x-api-key",
+            "authorization",
+            "cookie",
+            "x-mpass-edge-secret",
+            "x-auth-request-access-token",
+        }
+    )
 
     def _redacted_headers(self, request):
         """
