@@ -6,7 +6,7 @@
 from django.conf import settings
 
 # Third party imports
-from rest_framework.throttling import SimpleRateThrottle
+from rest_framework.throttling import AnonRateThrottle, SimpleRateThrottle
 
 
 class ApiKeyRateThrottle(SimpleRateThrottle):
@@ -48,3 +48,8 @@ class ApiKeyRateThrottle(SimpleRateThrottle):
             request.META["X-RateLimit-Reset"] = reset_time
 
         return allowed
+
+
+class ApiKeyRevocationRateThrottle(AnonRateThrottle):
+    scope = "api_key_revocation"
+    rate = "60/minute"
