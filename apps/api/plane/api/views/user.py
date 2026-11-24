@@ -9,10 +9,11 @@ from drf_spectacular.utils import OpenApiResponse
 
 # Module imports
 from plane.api.serializers import UserLiteSerializer
+from plane.api.middleware.api_authentication import APIKeyAuthentication
 from plane.api.views.base import BaseAPIView
-from plane.db.models import User
+from plane.db.models import APIToken, User
 from plane.utils.openapi.decorators import user_docs
-from plane.utils.openapi import USER_EXAMPLE
+from plane.utils.openapi import DELETED_RESPONSE, USER_EXAMPLE
 
 
 class UserEndpoint(BaseAPIView):
@@ -39,3 +40,23 @@ class UserEndpoint(BaseAPIView):
         """
         serializer = UserLiteSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class CurrentAPITokenAuthentication(APIKeyAuthentication):
+    def authenticate_header(self, request):
+        return self.auth_header_name
+
+
+class CurrentAPITokenEndpoint(BaseAPIView):
+    authentication_classes = [CurrentAPITokenAuthentication]
+    model = APIToken
+
+    @user_docs(
+        operation_id="revoke_current_api_token",
+        summary="Revoke current API token",
+        description="Delete the API token that authenticated this request. Other tokens are left untouched.",
+        responses={204: DELETED_RESPONSE},
+    )
+    def delete(self, request):
+        APIToken.objects.get(token=request.auth, user=request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
