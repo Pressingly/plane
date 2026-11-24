@@ -4,12 +4,17 @@
 
 from django.urls import path
 
-from plane.api.views import UserEndpoint
+from plane.api.views import CurrentAPITokenEndpoint, UserEndpoint
 
 urlpatterns = [
     path(
         "users/me/",
         UserEndpoint.as_view(http_method_names=["get"]),
         name="users",
+    ),
+    path(
+        "users/me/api-tokens/current/",
+        CurrentAPITokenEndpoint.as_view(http_method_names=["delete"]),
+        name="current-api-token",
     ),
 ]
