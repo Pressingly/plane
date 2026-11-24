@@ -106,6 +106,7 @@ def access_token_claims(**overrides):
 def id_token_claims(**overrides):
     base = access_token_claims(iss=MPASS_ISSUER, token_use="id", aud=CLIENT_ID)
     base.pop("client_id")
+    base["cognito:username"] = base.pop("username")
     return {**base, **overrides}
 
 
@@ -229,7 +230,7 @@ class TestForgedHeadersAreIgnored:
 
     def test_edge_request_logs_in(self):
         middleware = make_middleware()
-        request = make_request(meta=proxied())
+        request = make_request(meta=proxied(token=sign(access_token_claims())))
 
         with patch(PATCH_USER_LOGIN) as mock_login:
             middleware(request)
@@ -372,28 +373,53 @@ class TestCorporateIdSetting:
     @pytest.mark.parametrize("value", ["", "   "])
     def test_blank_corporate_id_turns_the_gate_off(self, value, settings):
         settings.SMB_CORPORATE_ID = value
-        verifier = MagicMock()
-        middleware = make_middleware(verifier)
+        middleware = make_middleware()
+        token = sign(access_token_claims(**{"custom:is_corporate": "false"}))
 
         with patch(PATCH_USER_LOGIN) as mock_login:
-            middleware(make_request(meta=proxied(token="garbage")))
+            middleware(make_request(meta=proxied(token=token)))
 
         mock_login.assert_called_once()
-        verifier.verify.assert_not_called()
 
 
 @pytest.mark.django_db
 class TestCorporateGateOff:
-    def test_unset_corporate_id_logs_in_without_reading_the_token(self):
-        verifier = MagicMock()
-        middleware = make_middleware(verifier)
-        request = make_request(meta=proxied(token="garbage"))
+    """With no SMB_CORPORATE_ID the token is still verified: it backs the asserted identity."""
 
+    def _run(self, token, verifier=None):
+        middleware = make_middleware(verifier)
         with patch(PATCH_USER_LOGIN) as mock_login:
-            middleware(request)
+            response = middleware(make_request(meta=proxied(token=token)))
+        return response, mock_login
+
+    def test_non_corporate_verified_token_logs_in(self):
+        response, mock_login = self._run(sign(access_token_claims(**{"custom:is_corporate": "false"})))
 
         mock_login.assert_called_once()
-        verifier.verify.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "token, reason",
+        [
+            (None, "missing_token"),
+            ("garbage", "malformed"),
+            (sign(access_token_claims(), key=OTHER_KEY), "bad_signature"),
+        ],
+    )
+    def test_unverified_token_is_refused(self, token, reason, caplog):
+        with caplog.at_level(logging.WARNING):
+            response, mock_login = self._run(token)
+
+        mock_login.assert_not_called()
+        assert response.status_code == 403
+        assert f"reason={reason}" in caplog.text
+        assert not User.objects.filter(email=VICTIM_EMAIL).exists()
+
+    def test_unconfigured_verifier_fails_closed(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            response, mock_login = self._run(sign(access_token_claims()), verifier=MpassTokenVerifier((), ""))
+
+        mock_login.assert_not_called()
+        assert "reason=verifier_unconfigured" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +587,7 @@ class TestMisconfiguredGateIsLogged:
         with caplog.at_level(logging.ERROR):
             ProxyAuthMiddleware(MagicMock())
 
-        assert "SMB_CORPORATE_ID is set but no token issuer or client id" in caplog.text
+        assert "mPass token verification has no issuer or client id" in caplog.text
 
     def test_gate_on_without_client_id_logs_error(self, settings, caplog):
         settings.SMB_CORPORATE_ID = CORPORATE_ID
@@ -570,9 +596,9 @@ class TestMisconfiguredGateIsLogged:
         with caplog.at_level(logging.ERROR):
             ProxyAuthMiddleware(MagicMock())
 
-        assert "SMB_CORPORATE_ID is set but no token issuer or client id" in caplog.text
+        assert "mPass token verification has no issuer or client id" in caplog.text
 
-    def test_configured_gate_logs_nothing(self, settings, caplog):
+    def test_configured_verification_logs_nothing(self, settings, caplog):
         settings.SMB_CORPORATE_ID = CORPORATE_ID
         settings.MPASS_COGNITO_ISSUER_URL = COGNITO_ISSUER
         settings.MPASS_OIDC_CLIENT_ID = CLIENT_ID
@@ -580,7 +606,7 @@ class TestMisconfiguredGateIsLogged:
         with caplog.at_level(logging.ERROR):
             ProxyAuthMiddleware(MagicMock())
 
-        assert "SMB_CORPORATE_ID is set" not in caplog.text
+        assert caplog.text == ""
 
     def test_gate_on_with_only_the_mpass_issuer_logs_cognito_error(self, settings, caplog):
         settings.SMB_CORPORATE_ID = CORPORATE_ID
@@ -590,7 +616,7 @@ class TestMisconfiguredGateIsLogged:
         with caplog.at_level(logging.ERROR):
             ProxyAuthMiddleware(MagicMock())
 
-        assert "SMB_CORPORATE_ID is set but the Cognito issuer is empty" in caplog.text
+        assert "the Cognito issuer is empty" in caplog.text
         assert "no token issuer or client id" not in caplog.text
 
     def test_gate_on_with_placeholder_cognito_issuer_logs_cognito_error(self, settings, caplog):
@@ -602,7 +628,7 @@ class TestMisconfiguredGateIsLogged:
         with caplog.at_level(logging.ERROR):
             ProxyAuthMiddleware(MagicMock())
 
-        assert "SMB_CORPORATE_ID is set but the Cognito issuer is empty" in caplog.text
+        assert "the Cognito issuer is empty" in caplog.text
 
     def test_placeholder_corporate_id_logs_error(self, settings, caplog):
         settings.SMB_CORPORATE_ID = " CHANGE_ME_SMB_CORPORATE_ID "
@@ -611,13 +637,21 @@ class TestMisconfiguredGateIsLogged:
             ProxyAuthMiddleware(MagicMock())
 
         assert "SMB_CORPORATE_ID is a CHANGE_ME_ placeholder: every mPass login is refused" in caplog.text
-        assert "SMB_CORPORATE_ID is set" not in caplog.text
+        assert "mPass token verification" not in caplog.text
 
-    def test_gate_off_logs_nothing(self, caplog):
+    def test_gate_off_still_logs_unconfigured_verification(self, caplog):
         with caplog.at_level(logging.ERROR):
             ProxyAuthMiddleware(MagicMock())
 
-        assert "SMB_CORPORATE_ID is set" not in caplog.text
+        assert "mPass token verification has no issuer or client id" in caplog.text
+
+    def test_unusable_edge_secret_skips_verification_logs(self, settings, caplog):
+        settings.MPASS_EDGE_SECRET = ""
+
+        with caplog.at_level(logging.ERROR):
+            ProxyAuthMiddleware(MagicMock())
+
+        assert "mPass token verification" not in caplog.text
 
 
 class TestJwksFailures:

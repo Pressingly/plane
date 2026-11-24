@@ -3,6 +3,7 @@
 # See the LICENSE file for details.
 
 import logging
+from dataclasses import dataclass
 from uuid import uuid4
 
 from django.conf import settings
@@ -15,6 +16,11 @@ from plane.authentication.middleware.config_values import is_placeholder
 from plane.authentication.middleware.edge_trust import (
     edge_secret_is_usable,
     request_is_from_edge,
+)
+from plane.authentication.middleware.identity_binding import (
+    AssertedIdentity,
+    binding_rejection,
+    token_mpass_id,
 )
 from plane.authentication.middleware.mpass_token import (
     InvalidMpassToken,
@@ -59,7 +65,9 @@ _SESSION_ENSURED_KEY = "proxy_auth_smb_membership_ensured"
 
 
 _IDENTITY_HEADERS = ("HTTP_X_AUTH_REQUEST_EMAIL", "HTTP_X_AUTH_REQUEST_USER")
-_MPASS_ID_HEADERS = ("HTTP_X_AUTH_REQUEST_USER", "HTTP_X_AUTH_REQUEST_PREFERRED_USERNAME")
+# Preferred-Username first: with email capture on it carries the mPass id and
+# X-Auth-Request-User carries the email; with capture off only User has the id.
+_MPASS_ID_HEADERS = ("HTTP_X_AUTH_REQUEST_PREFERRED_USERNAME", "HTTP_X_AUTH_REQUEST_USER")
 _ACCESS_TOKEN_HEADER = "HTTP_X_AUTH_REQUEST_ACCESS_TOKEN"
 
 
@@ -67,10 +75,18 @@ def _carries_identity_headers(request) -> bool:
     return any(request.META.get(header) for header in _IDENTITY_HEADERS)
 
 
-def _mpass_id_for_logs(request) -> str:
-    """The caller's mPass id, never an email: with email capture on, X-Auth-Request-User is the email."""
+def _asserted_mpass_ids(request) -> tuple[str, ...]:
+    """Every mPass id the proxy headers assert, in header order; an email-shaped value is not one."""
     candidates = (request.META.get(header, "").strip() for header in _MPASS_ID_HEADERS)
-    return next((value for value in candidates if value and "@" not in value), "-")
+    return tuple(value for value in candidates if value and "@" not in value)
+
+
+def _mpass_id_for_logs(request) -> str:
+    return next(iter(_asserted_mpass_ids(request)), "-")
+
+
+def _synthetic_email_domain() -> str:
+    return getattr(settings, "DEFAULT_EMAIL_DOMAIN", "askii.ai")
 
 
 def _expected_corporate_id() -> str:
@@ -78,28 +94,49 @@ def _expected_corporate_id() -> str:
     return (getattr(settings, "SMB_CORPORATE_ID", None) or "").strip()
 
 
-def _corporate_rejection(request, token_verifier) -> str | None:
-    """Why the caller fails the SMB corporate gate, or None when it passes.
+def _corporate_config_rejection() -> str | None:
+    return "placeholder_config" if is_placeholder(_expected_corporate_id()) else None
 
-    When SMB_CORPORATE_ID is not set the gate is off and no token is read.
-    """
+
+def _corporate_claims_rejection(claims: dict) -> str | None:
+    """Why the verified token fails the SMB corporate gate, or None when it passes or the gate is off."""
     expected = _expected_corporate_id()
     if not expected:
         return None
-    if is_placeholder(expected):
-        return "placeholder_config"
-    access_token = request.META.get(_ACCESS_TOKEN_HEADER)
-    if not access_token:
-        return "missing_token"
-    try:
-        claims = token_verifier.verify(access_token)
-    except InvalidMpassToken as exc:
-        return exc.reason
     if claims.get("custom:is_corporate") != "true":
         return "not_corporate"
     if claims.get("custom:corporate_id") != expected:
         return "wrong_organization"
     return None
+
+
+def _verified_token_claims(request, token_verifier) -> dict:
+    token = request.META.get(_ACCESS_TOKEN_HEADER)
+    if not token:
+        raise InvalidMpassToken("missing_token")
+    return token_verifier.verify(token)
+
+
+@dataclass(frozen=True)
+class LoginRefusal:
+    reason: str
+    token_mpass_id: str = "-"
+
+
+def _login_refusal(request, email: str, token_verifier) -> LoginRefusal | None:
+    """Why a header login is refused, or None when the verified token backs the asserted identity."""
+    config_rejection = _corporate_config_rejection()
+    if config_rejection:
+        return LoginRefusal(config_rejection)
+    try:
+        claims = _verified_token_claims(request, token_verifier)
+    except InvalidMpassToken as exc:
+        return LoginRefusal(exc.reason)
+    asserted = AssertedIdentity(email=email, mpass_ids=_asserted_mpass_ids(request))
+    reason = _corporate_claims_rejection(claims) or binding_rejection(claims, asserted, _synthetic_email_domain())
+    if reason is None:
+        return None
+    return LoginRefusal(reason, token_mpass_id(claims) or "-")
 
 
 class ProxyAuthMiddleware:
@@ -114,7 +151,9 @@ class ProxyAuthMiddleware:
 
     The headers are honoured only on requests carrying MPASS_EDGE_SECRET in
     X-Mpass-Edge-Secret, which Traefik sets on the SSO router; on any other
-    request they are ignored and Plane's own authentication applies.
+    request they are ignored and Plane's own authentication applies. A login
+    from them also needs the forwarded X-Auth-Request-Access-Token to verify
+    and to name the same mPass id (and email, when it carries one).
 
     To disable, remove this class from the MIDDLEWARE list in settings.
     """
@@ -129,23 +168,22 @@ class ProxyAuthMiddleware:
                 "MPASS_EDGE_SECRET is unset, a CHANGE_ME_ placeholder or shorter than 32 characters: "
                 "mPass identity headers will be ignored and SSO login is disabled"
             )
-        if _expected_corporate_id():
-            self._log_corporate_gate_misconfiguration()
-
-    def _log_corporate_gate_misconfiguration(self):
-        if is_placeholder(_expected_corporate_id()):
+        elif is_placeholder(_expected_corporate_id()):
             logger.error("SMB_CORPORATE_ID is a CHANGE_ME_ placeholder: every mPass login is refused")
-            return
+        else:
+            self._log_token_verification_misconfiguration()
+
+    def _log_token_verification_misconfiguration(self):
         if not self.token_verifier.is_configured:
             logger.error(
-                "SMB_CORPORATE_ID is set but no token issuer or client id is configured "
-                "(MPASS_COGNITO_ISSUER_URL, MPASS_OIDC_CLIENT_ID): every mPass login will be refused"
+                "mPass token verification has no issuer or client id (MPASS_COGNITO_ISSUER_URL, "
+                "MPASS_TOKEN_ISSUER_URL, MPASS_OIDC_CLIENT_ID): every mPass login will be refused"
             )
         if not cognito_issuer_from_settings(settings):
             logger.error(
-                "SMB_CORPORATE_ID is set but the Cognito issuer is empty (MPASS_COGNITO_ISSUER_URL, "
-                "or COGNITO_AWS_REGION and COGNITO_USER_POOL_ID): browser sessions forward "
-                "Cognito-issued tokens, so every browser mPass login will be refused"
+                "the Cognito issuer is empty (MPASS_COGNITO_ISSUER_URL, or COGNITO_AWS_REGION and "
+                "COGNITO_USER_POOL_ID): browser sessions forward Cognito-issued tokens, so every "
+                "browser mPass login will be refused"
             )
 
     def __call__(self, request):
@@ -186,12 +224,13 @@ class ProxyAuthMiddleware:
         if not email:
             return self.get_response(request)
 
-        rejection = _corporate_rejection(request, self.token_verifier)
-        if rejection:
+        refusal = _login_refusal(request, email, self.token_verifier)
+        if refusal:
             logger.warning(
-                "mPass proxy login refused: reason=%s mpass_id=%s path=%s",
-                rejection,
+                "mPass proxy login refused: reason=%s mpass_id=%s token_mpass_id=%s path=%s",
+                refusal.reason,
                 _mpass_id_for_logs(request),
+                refusal.token_mpass_id,
                 request.path,
             )
             return JsonResponse({"error": "access_denied"}, status=403)
@@ -240,12 +279,9 @@ class ProxyAuthMiddleware:
         Returns the raw (un-normalised) email string, or "" if none could be
         derived. Caller is responsible for `_normalise_email` before using.
 
-        TODO(security): the bare-username synthesis paths let a Cognito
-        principal whose username collides with a real Plane user's email
-        local-part impersonate that user (e.g. `cognito:username=alice` →
-        synthesised to `alice@askii.ai` → resolves to an existing `alice@askii.ai`
-        Plane user). The defensive fix is to drop these synthesis paths and
-        require a real email claim from the upstream proxy.
+        The login path only accepts a synthesised address that is the verified
+        token's own `<mpass id>@DEFAULT_EMAIL_DOMAIN`, so a caller can synthesise
+        no one else's.
         """
         email = (request.META.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
         if email and "@" not in email:

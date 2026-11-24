@@ -38,6 +38,7 @@ Design contract being tested
   re-raises if the user still doesn't exist
 """
 
+import json
 import uuid
 
 import pytest
@@ -73,11 +74,49 @@ def _edge_secret(settings):
     settings.SMB_CORPORATE_ID = None
 
 
+BOUND_MPASS_ID = "mpass-bound"
+
+
+class ClaimsVerifier:
+    """Stands in for MpassTokenVerifier: the token is the claims as JSON.
+
+    Signature checks are covered in test_proxy_auth_trust.py; these tests are
+    about what the middleware does once a token verifies.
+    """
+
+    is_configured = True
+
+    def verify(self, token):
+        return json.loads(token)
+
+
+def bound_identity(meta):
+    """The Preferred-Username header and token oauth2-proxy would forward with these identity headers."""
+    email = (meta.get("HTTP_X_AUTH_REQUEST_EMAIL") or "").strip()
+    user = (meta.get("HTTP_X_AUTH_REQUEST_USER") or "").strip()
+    if "@" in email:
+        mpass_id = user if user and "@" not in user else BOUND_MPASS_ID
+        claims = {"token_use": "id", "cognito:username": mpass_id, "email": email}
+        return {
+            "HTTP_X_AUTH_REQUEST_PREFERRED_USERNAME": mpass_id,
+            "HTTP_X_AUTH_REQUEST_ACCESS_TOKEN": json.dumps(claims),
+        }
+    bare_username = email or user
+    if not bare_username:
+        return {}
+    claims = {"token_use": "access", "username": bare_username}
+    return {
+        "HTTP_X_AUTH_REQUEST_PREFERRED_USERNAME": bare_username,
+        "HTTP_X_AUTH_REQUEST_ACCESS_TOKEN": json.dumps(claims),
+    }
+
+
 def make_request(path="/api/issues/", meta=None, authenticated_user=None, from_edge=True):
     """Return a fake GET request with optional META headers and auth state.
 
     from_edge adds the edge secret Traefik injects, so the identity headers in
-    meta are trusted as they are in production behind mPass.
+    meta are trusted as they are in production behind mPass, along with the
+    mPass id and token that back them.
     """
     factory = RequestFactory()
     request = factory.get(path)
@@ -86,7 +125,7 @@ def make_request(path="/api/issues/", meta=None, authenticated_user=None, from_e
     if from_edge:
         request.META["HTTP_X_MPASS_EDGE_SECRET"] = EDGE_SECRET
     if meta:
-        request.META.update(meta)
+        request.META.update({**bound_identity(meta), **meta})
     return request
 
 
@@ -94,7 +133,7 @@ def make_middleware(get_response=None):
     """Return a ProxyAuthMiddleware instance with a trivial get_response stub."""
     if get_response is None:
         get_response = MagicMock(return_value=MagicMock(status_code=200))
-    return ProxyAuthMiddleware(get_response)
+    return ProxyAuthMiddleware(get_response, token_verifier=ClaimsVerifier())
 
 
 # ---------------------------------------------------------------------------
