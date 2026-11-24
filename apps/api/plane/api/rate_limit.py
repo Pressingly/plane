@@ -52,4 +52,4 @@ class ApiKeyRateThrottle(SimpleRateThrottle):
 
 class ApiKeyRevocationRateThrottle(AnonRateThrottle):
     scope = "api_key_revocation"
-    rate = "60/minute"
+    rate = "600/minute"

@@ -11,7 +11,7 @@ from django.utils import timezone
 from rest_framework import status
 
 from plane.api.rate_limit import ApiKeyRateThrottle, ApiKeyRevocationRateThrottle
-from plane.db.models import APIToken, User
+from plane.db.models import APIToken, Integration, User, WorkspaceIntegration
 
 CURRENT_TOKEN_URL = "/api/v1/users/me/api-tokens/current/"
 USERS_ME_URL = "/api/v1/users/me/"
@@ -122,6 +122,26 @@ class TestCurrentAPITokenRevoke:
 
         assert revoke(api_client, current_token.token).status_code == status.HTTP_204_NO_CONTENT
         assert is_revoked(current_token)
+
+    def test_bot_token_is_not_revocable(self, api_client, owner):
+        bot_token = make_token(owner, user_type=1)
+
+        response = revoke(api_client, bot_token.token)
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert APIToken.objects.filter(pk=bot_token.pk).exists()
+
+    def test_token_used_by_an_integration_is_not_revocable(self, api_client, owner, current_token, workspace):
+        integration = Integration.objects.create(title="Revoke test", provider=f"revoke-{uuid4().hex[:8]}")
+        workspace_integration = WorkspaceIntegration.objects.create(
+            workspace=workspace, actor=owner, integration=integration, api_token=current_token
+        )
+
+        response = revoke(api_client, current_token.token)
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert APIToken.objects.filter(pk=current_token.pk).exists()
+        assert WorkspaceIntegration.objects.filter(pk=workspace_integration.pk).exists()
 
     def test_unknown_token_is_unauthorized(self, api_client, current_token):
         response = revoke(api_client, f"revoke-{uuid4().hex}")
