@@ -42,14 +42,12 @@ class UserEndpoint(BaseAPIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-class CurrentAPITokenAuthentication(APIKeyAuthentication):
-    def authenticate_header(self, request):
-        return self.auth_header_name
-
-
 class CurrentAPITokenEndpoint(BaseAPIView):
-    authentication_classes = [CurrentAPITokenAuthentication]
+    authentication_classes = [APIKeyAuthentication]
     model = APIToken
+
+    def get_authenticate_header(self, request):
+        return APIKeyAuthentication.auth_header_name
 
     @user_docs(
         operation_id="revoke_current_api_token",
