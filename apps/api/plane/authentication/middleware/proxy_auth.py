@@ -75,10 +75,14 @@ def _carries_identity_headers(request) -> bool:
     return any(request.META.get(header) for header in _IDENTITY_HEADERS)
 
 
+def _is_mpass_id(value: str) -> bool:
+    return bool(value) and "@" not in value
+
+
 def _asserted_mpass_ids(request) -> tuple[str, ...]:
     """Every mPass id the proxy headers assert, in header order; an email-shaped value is not one."""
     candidates = (request.META.get(header, "").strip() for header in _MPASS_ID_HEADERS)
-    return tuple(value for value in candidates if value and "@" not in value)
+    return tuple(value for value in candidates if _is_mpass_id(value))
 
 
 def _mpass_id_for_logs(request) -> str:
@@ -136,7 +140,8 @@ def _login_refusal(request, email: str, token_verifier) -> LoginRefusal | None:
     reason = _corporate_claims_rejection(claims) or binding_rejection(claims, asserted, _synthetic_email_domain())
     if reason is None:
         return None
-    return LoginRefusal(reason, token_mpass_id(claims) or "-")
+    named = token_mpass_id(claims)
+    return LoginRefusal(reason, named if _is_mpass_id(named) else "-")
 
 
 class ProxyAuthMiddleware:
